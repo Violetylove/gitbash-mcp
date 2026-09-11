@@ -95,6 +95,22 @@ npm i -g .        # 把当前目录作为包全局安装
 | 标记弃用 | `npm deprecate gitbash-mcp@2.1.0 "reason"` | 推荐，温和且可逆 |
 | 整包撤回 | `npm unpublish gitbash-mcp --force` | 有严格限制，慎用 |
 
+## 8.5 本机特有问题（已遇到）
+
+**registry 是 npmmirror（只读镜像）**：`npm config get registry` 返回 `https://registry.npmmirror.com` 时，
+`npm publish` 会失败，`npm whoami` 也会误报 `need auth`（因为它在问镜像）。
+
+- `package.json` 已加 `publishConfig.registry = https://registry.npmjs.org/`，发布时自动走官方源；
+- 手动确认身份：`npm whoami --registry=https://registry.npmjs.org/`。
+
+**账号开了 2FA**：`npm publish` 会报
+`E403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required`。两种解法：
+
+1. **每次带 OTP**：`npm publish --otp=123456`（验证器里的 6 位码，30 秒有效）。
+2. **一劳永逸**：npmjs.com → Access Tokens → Generate New Token → **Granular Access Token**，
+   选包范围、权限 `Read and write`、勾选 **Bypass 2FA**，然后把 `~/.npmrc` 里的
+   `//registry.npmjs.org/:_authToken=<新 token>` 换掉即可。
+
 ## 9. 常见坑
 
 - **名字被占用**：发布前先 `npm view gitbash-mcp`，404 才可用。若将来被占用，改用 scope：把 `name` 改成 `@你的用户名/gitbash-mcp`，然后 `npm publish --access public`。

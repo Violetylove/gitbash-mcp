@@ -32,6 +32,10 @@
     "start": "node bin/gitbash-mcp.js",
     "test": "node test-client.mjs && node test-cli.mjs && node test-menu.mjs"
   },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.24.0"
