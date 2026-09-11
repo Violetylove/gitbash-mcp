@@ -24,10 +24,10 @@ npm pack --dry-run
 ~~~
 package: gitbash-mcp@2.3.0
 Tarball Contents: LICENSE, README.md, package.json, server.js, bin/gitbash-mcp.js,
-                 lib/cli.js, lib/detect.js, lib/menu.js, lib/runner.js, lib/theme.js, lib/audit.js
-total files: 11
-package size: 19.4 kB
-unpacked size: 53.5 kB
+                 lib/cli.js, lib/detect.js, lib/menu.js, lib/runner.js, lib/theme.js, lib/audit.js, lib/policy.js
+total files: 12
+package size: 23.5 kB
+unpacked size: 61.9 kB
 ~~~
 
 如果出现 `gitbash-mcp.exe`、`node_modules`、`docs`、`test-*.mjs`，说明 `package.json` 的 `files` 白名单被改坏了。

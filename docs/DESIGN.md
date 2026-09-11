@@ -61,6 +61,15 @@ MCP 客户端（DSH / Claude Code / Codex）
   "killed_by": null,       // 'cancel' | 'timeout' | null
   "queued_ms": 0,          // 因并发上限而排队的时间
   "audit_id": "...",       // 该次调用的审计记录 id
+  "policy": {              // 允许执行时附带的裁决信息
+    "decision": "allow",   // 'allow' | 'allow-risky'
+    "tier": "safe",        // safe | suspicious | dangerous | catastrophic
+    "stance": "ask",       // 来自 GITBASH_MCP_RISKY
+    "matched_rules": []
+  },
+  "error_code": "APPROVAL_REQUIRED", // 被策略拦住时：APPROVAL_REQUIRED | POLICY_DENIED
+  "category": "dangerous",
+  "matched_rules": ["recursive delete"]
   "error_code": "BASH_NOT_FOUND",  // 仅缺 bash 时出现
   "hint": "..."                     // 仅缺 bash 时出现
 }
@@ -149,7 +158,19 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 
 这些是"降低误伤"的护栏，**不是安全边界**（正则/资源限制都挡不住蓄意绕过）。真正的隔离只能在 OS 层。
 
-### 5.8 分发：全局安装，不做 exe
+### 5.8 命令策略（P1，单开关）
+
+三档分类（`lib/policy.js`，纯函数）：`catastrophic` / `dangerous` / `suspicious`；
+其中 `rm` **用结构化解析**（提取 flag 与目标）而不是正则——`rm -rf` / `rm -fr` / `rm --recursive` 的写法太多，
+正则漏判过一次（`rm -rf ./x` 曾判成 safe），这个 bug 由 `test-policy.mjs` 的 32 个用例钉住。
+
+裁决：`safe`/`suspicious` → 放行（后者在结果里标注 tier）；`dangerous` → 默认 `ask-required`（返回 `APPROVAL_REQUIRED`，
+指引模型去问用户）；`catastrophic` → 默认 `deny`（`POLICY_DENIED`）；当 `GITBASH_MCP_RISKY=allow` 时两者都放行并标注 `allow-risky`。
+
+**不实现 in-band 批准码**：模型拥有同一个 shell，它能跑任何它能提交的批准命令。唯一不可伪造的同意通道是 MCP 的启动配置。
+新增 `policy` 工具输出完整规则与当前姿态，供模型向用户解释。
+
+### 5.9 分发：全局安装，不做 exe
 `bin: { gitbash-mcp: server.js }`，shebang `#!/usr/bin/env node`，用户 `npm i -g gitbash-mcp`。
 `bun build --compile` 会内嵌整个 Bun 运行时（实测 108.82MB），全局安装只需用户已有的 Node，
 安装体积约 14MB（依赖 13.85MB）。
@@ -189,7 +210,9 @@ DSH 也可用面板插件注册。
 `node test-runner.mjs` 单测 P0 护栏：环境洗白的保留/剔除清单、spill 内存与磁盘双重封顶、
 信号量并发峰值与 `queuedMs`、**取消后进程树确实死亡**（用延迟写入的标记文件验证）、审计 JSONL 往返。
 
-> 四套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
+`node test-policy.mjs` 覆盖策略：32 个档位分类用例（含曾经误判的 `rm -rf ./x`）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
+
+> 五套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
 > 审计写入用临时 `LOCALAPPDATA`，不会污染真实日志。
 
 ## 9. 变更纪律

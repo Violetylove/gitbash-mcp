@@ -32,7 +32,12 @@
 
 预估 2–3 小时。验收：写入幂等、失败可回滚（备份）、无 agent 时给出手动片段。
 
-### M10：P1 策略引擎（下一步）
+### M10：P1 策略引擎（完成）
+
+三档规则（rm 走结构化解析）+ 单开关 `GITBASH_MCP_RISKY`（默认 `ask`）+ `policy` 工具 + `test-policy.mjs`（32 用例）。
+**不做** in-band 批准码——模型拥有同一个 shell，那是自批准。
+
+### M11：发布到 npm（等待 2FA）
 
 三档规则（catastrophic / dangerous / suspicious）× 一个姿态 `GITBASH_MCP_RISKY`（默认 `ask`：拦住并让用户决定；
 `allow`：放行 + 审计）。新增 `policy` 工具报告生效策略。**不做** in-band 批准码——模型拥有同一个 shell，那是自批准。

@@ -37,6 +37,7 @@ gitbash-mcp init --yes     # 免交互，配置所有检测到的客户端
 gitbash-mcp init --no-tui  # 纯文本编号输入（非 TTY 环境会自动切换）
 gitbash-mcp uninstall      # 反向移除
 gitbash-mcp audit          # 查看最近的命令审计日志
+gitbash-mcp policy         # 查看当前命令策略
 ~~~
 
 菜单操作：`↑/↓`（或 `k/j`）移动光标，`空格` 勾选/取消，`a` 全选，`n` 全不选，`1-9` 跳到并切换该项，`回车` 确认，`q`/`Esc`/`Ctrl-C` 取消。
@@ -112,6 +113,21 @@ gitbash-mcp audit          # 查看最近的命令审计日志
 
 > **诚实声明**：这些是『降低误伤与明显滥用』的护栏，**不是安全边界**——它挡不住蓄意绕过（`r''m`、`$IFS`、
 > `base64 -d|bash` 等）。真正的隔离只能在 OS 层做（低权限账户 / 容器 / VM）。
+
+## 命令策略（P1，一个开关）
+
+按危险程度分三档，只由**一个**环境变量控制（写在 MCP 客户端配置里，模型改不了）：
+
+| 档位 | 例子 | `GITBASH_MCP_RISKY=ask`（默认） | `=allow` |
+|---|---|---|---|
+| catastrophic | `mkfs`、`diskpart`、`rm -rf /`、`shutdown` | 拒绝（`POLICY_DENIED`） | 放行 + 审计 |
+| dangerous | `rm -rf ./x`、`git push --force`、`curl \| bash`、`npm publish` | **拦住，让你决定**（`APPROVAL_REQUIRED`） | 放行 + 审计 |
+| suspicious | `eval`、`base64 -d \| sh`、`nc`、`env \| curl` | 放行 + 审计 + 结果标注 | 同左 |
+
+被拦住时模型会拿到明确指引：① 让你自己在终端跑 ② 换更安全的写法 ③ 你改配置加 `GITBASH_MCP_RISKY=allow` 并重启。
+查看当前策略：`gitbash-mcp policy`，或让模型调 `policy` 工具。
+
+> **为什么没有\"批准码\"**：模型拥有同一个 shell——任何它能提交的批准它也能伪造。唯一不可伪造的同意，是你在**启动配置**里的选择。
 
 ## 故障排查
 

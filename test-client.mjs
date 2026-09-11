@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 const cwd = dirname(fileURLToPath(import.meta.url))
@@ -43,6 +43,7 @@ try {
   assert(names.includes('exec'), 'tools list contains exec', names)
   assert(names.includes('bash_info'), 'tools list contains bash_info', names)
   assert(names.includes('doctor'), 'tools list contains doctor', names)
+  assert(names.includes('policy'), 'tools list contains policy', names)
 
   console.log('== doctor ==')
   step('calling doctor')
@@ -134,6 +135,52 @@ try {
   abortElapsed = Date.now() - abortStart
   assert(abortRejected, 'the aborted call rejects instead of returning', abortElapsed)
   assert(abortElapsed < 6000, 'the abort settles promptly, not after the 30s sleep', abortElapsed)
+
+  console.log('== policy tool ==')
+  step('calling policy')
+  const rpol = await client.callTool({ name: 'policy', arguments: {} })
+  const tpol = rpol.content[0].text
+  assert(tpol.includes('stance        : ask'), 'policy reports the default ask stance', tpol.slice(0, 90))
+  assert(tpol.includes('catastrophic rules'), 'policy lists the rule tiers')
+
+  console.log('== policy: dangerous command is blocked under ask ==')
+  const victim = mkdtempSync(join(tmpdir(), 'gbm-victim-'))
+  writeFileSync(join(victim, 'keep.txt'), 'x')
+  const victimPosix = victim.replace(/[\\]/g, '/')
+  step('calling exec with a recursive delete')
+  const rp = await client.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
+  const jp = JSON.parse(rp.content[0].text)
+  assert(jp.error_code === 'APPROVAL_REQUIRED', 'dangerous command asks the user', jp.error_code)
+  assert(jp.category === 'dangerous', 'category is dangerous', jp.category)
+  assert(Array.isArray(jp.matched_rules) && jp.matched_rules.length > 0, 'matched rules are reported', jp.matched_rules)
+  assert(String(jp.hint).includes('Blocked'), 'hint explains the block', jp.hint)
+  assert(existsSync(victim), 'the blocked command never ran')
+
+  console.log('== policy: catastrophic is denied outright ==')
+  const rc = await client.callTool({ name: 'exec', arguments: { command: 'mkfs.ext4 /dev/sda1' } })
+  const jc = JSON.parse(rc.content[0].text)
+  assert(jc.error_code === 'POLICY_DENIED', 'catastrophic returns POLICY_DENIED', jc.error_code)
+  assert(jc.category === 'catastrophic', 'category is catastrophic', jc.category)
+
+  console.log('== policy: suspicious runs but is flagged ==')
+  const rs = await client.callTool({ name: 'exec', arguments: { command: 'eval "echo suspicious-ran"' } })
+  const js = JSON.parse(rs.content[0].text)
+  assert(js.exit_code === 0, 'suspicious command runs', js.exit_code)
+  assert(js.policy && js.policy.tier === 'suspicious', 'result flags the suspicious tier', js.policy)
+
+  console.log('== policy: stance=allow runs the dangerous command ==')
+  const allowEnv = { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome, GITBASH_MCP_RISKY: 'allow' }
+  const t3 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'server.js')], cwd, env: allowEnv })
+  const c3 = new Client({ name: 'gitbash-mcp-test-allow', version: '1.0.0' })
+  await c3.connect(t3)
+  const ra = await c3.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
+  const ja = JSON.parse(ra.content[0].text)
+  assert(ja.exit_code === 0, 'allow stance ran the command', ja.exit_code)
+  assert(ja.policy && ja.policy.decision === 'allow-risky', 'result records allow-risky', ja.policy)
+  assert(!existsSync(victim), 'the directory was really removed')
+  const rpol2 = await c3.callTool({ name: 'policy', arguments: {} })
+  assert(rpol2.content[0].text.includes('stance        : allow'), 'second server reports the allow stance')
+  await c3.close()
 
   console.log('== missing bash: structured BASH_NOT_FOUND ==')
   step('spawning a second server with no reachable bash')
