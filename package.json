@@ -1,0 +1,39 @@
+{
+  "name": "gitbash-mcp",
+  "version": "2.2.0",
+  "description": "MCP server that exposes git-bash (MSYS2) command execution to AI agents such as DSH, Claude Code and Codex.",
+  "type": "module",
+  "main": "server.js",
+  "bin": {
+    "gitbash-mcp": "bin/gitbash-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "server.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "git-bash",
+    "bash",
+    "msys2",
+    "windows",
+    "shell",
+    "dsh"
+  ],
+  "scripts": {
+    "start": "node bin/gitbash-mcp.js",
+    "test": "node test-client.mjs && node test-cli.mjs && node test-menu.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  }
+}

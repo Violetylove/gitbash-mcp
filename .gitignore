@@ -1,0 +1,7 @@
+node_modules/
+.npm-cache/
+*.exe
+*.tgz
+test-out.log
+*.log
+.DS_Store
