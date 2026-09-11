@@ -6,6 +6,11 @@ import { join } from 'node:path'
 import { parseCommand } from '../lib/shell-parse.js'
 import { evaluateCommand, decide, currentStance, describePolicy, lists } from '../lib/policy.js'
 
+// Stay hermetic: an allow-stance parent (e.g. this suite launched through the
+// gitbash MCP with GITBASH_MCP_RISKY=allow) would otherwise flip every
+// ask-required assertion below.
+delete process.env.GITBASH_MCP_RISKY
+
 let failures = 0
 function assert(cond, label, detail) {
   if (cond) console.log('  ok  ' + label)
