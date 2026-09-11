@@ -1,7 +1,7 @@
 // Menu reducer tests: the interactive key logic is pure, so it is testable
-// without a TTY. Run: node test-menu.mjs
-import { createMenuState, reduceMenu, selectedItems, menuLines, menuRows, renderFrame } from './lib/menu.js'
-import { makeStyler } from './lib/theme.js'
+// without a TTY. Run: node test/test-menu.mjs
+import { createMenuState, reduceMenu, selectedItems, menuLines, menuRows, renderFrame } from '../lib/menu.js'
+import { makeStyler } from '../lib/theme.js'
 const ESC = String.fromCharCode(27)
 
 let failures = 0

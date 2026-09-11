@@ -1,10 +1,10 @@
 // Policy tests for model D: parser, capability classification, project trust,
-// stance decisions and the report. Run: node test-policy.mjs
+// stance decisions and the report. Run: node test/test-policy.mjs
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseCommand } from './lib/shell-parse.js'
-import { evaluateCommand, decide, currentStance, describePolicy, lists } from './lib/policy.js'
+import { parseCommand } from '../lib/shell-parse.js'
+import { evaluateCommand, decide, currentStance, describePolicy, lists } from '../lib/policy.js'
 
 let failures = 0
 function assert(cond, label, detail) {

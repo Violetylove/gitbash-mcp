@@ -104,7 +104,7 @@ PATH 上的 git、**逐条候选路径命中情况**、缺 bash 时的修复步�
 
 观感：进入终端**备用屏幕**（`\x1b[?1049h`）并隐藏光标，每次按键整帧重绘（`\x1b[H` + 内容 + `\x1b[J`），
 用 `◇ ❯ ◻ ◼ ✔ ✖ │ ·` 符号体系与 ANSI 着色（经 `lib/theme.js`，尊重 `NO_COLOR`/`FORCE_COLOR`/`TERM=dumb`），
-支持窗口 resize 重绘。按键逻辑是纯函数 `reduceMenu`，帧内容由纯函数 `menuRows`/`renderFrame` 生成，均由 `test-menu.mjs` 单测覆盖。
+支持窗口 resize 重绘。按键逻辑是纯函数 `reduceMenu`，帧内容由纯函数 `menuRows`/`renderFrame` 生成，均由 `test/test-menu.mjs` 单测覆盖。
 
 写入语义（重要）：JSON 类目标是**按键合并后整文件重写**（2 空格缩进，已有键保留但格式被规范化）；
 TOML/YAML 类是**先删除我们自己的段/块，再追加到文件末尾**。两类写入前都备份 `*.bak`，且重复运行幂等。
@@ -173,7 +173,7 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 不引入任何需要人维护的清单文件。
 
 **结构化优先于正则**：`rm -rf`/`-fr`/`--recursive` 靠提取 flag 与目标判定。早期逐行 `^rm` 匹配时，多行脚本
-`cd /tmp` 换行 `rm -rf /` 被判成 safe（`^` 少了 `/m`），这个 bug 由 `test-policy.mjs` 钉住；here-doc 正文也曾被当成命令
+`cd /tmp` 换行 `rm -rf /` 被判成 safe（`^` 少了 `/m`），这个 bug 由 `test/test-policy.mjs` 钉住；here-doc 正文也曾被当成命令
 （`cat <<EOF` + `rm -rf /` 误判 catastrophic），修好后正文直接跳过。
 
 `read-only`/`project` → 放行（结果里带 `policy.tier`）；其余默认 `ask-required`（`APPROVAL_REQUIRED`，指引模型去问用户）/
@@ -212,17 +212,17 @@ DSH 也可用面板插件注册。
 
 ## 8. 测试策略
 
-`node test-client.mjs` 覆盖：工具握手与列举、`doctor` 报告、回显、**管道**、非零退出码、
+`node test/test-client.mjs` 覆盖：工具握手与列举、`doctor` 报告、回显、**管道**、非零退出码、
 **超时整树杀**、**超 64KB 截断 + spill 全量校验**、空命令报错、**缺 bash 降级**
 （清洗 env 拉起第二个实例，断言 `BASH_NOT_FOUND` + 修复指引 + doctor 报 NOT FOUND）。
 
-`node test-cli.mjs` 覆盖 CLI：help/version/doctor、`--dry-run` 不落盘、init 写入并保留既有内容、备份生成、
+`node test/test-cli.mjs` 覆盖 CLI：help/version/doctor、`--dry-run` 不落盘、init 写入并保留既有内容、备份生成、
 **二次 init 幂等**、uninstall 只删自己的条目、`--yes` 选择已检测客户端；全部在临时 root 中进行，不碰真实配置。
 
-`node test-runner.mjs` 单测 P0 护栏：环境洗白的保留/剔除清单、spill 内存与磁盘双重封顶、
+`node test/test-runner.mjs` 单测 P0 护栏：环境洗白的保留/剔除清单、spill 内存与磁盘双重封顶、
 信号量并发峰值与 `queuedMs`、**取消后进程树确实死亡**（用延迟写入的标记文件验证）、审计 JSONL 往返。
 
-`node test-policy.mjs` 覆盖策略：32 个档位分类用例（含曾经误判的 `rm -rf ./x`）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
+`node test/test-policy.mjs` 覆盖策略：32 个档位分类用例（含曾经误判的 `rm -rf ./x`）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
 
 > 五套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
 > 审计写入用临时 `LOCALAPPDATA`，不会污染真实日志。

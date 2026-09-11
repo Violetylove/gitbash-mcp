@@ -21,11 +21,12 @@ agent-git-bash/
 │   ├── theme.js          ← ANSI 着色与转义序列（尊重 NO_COLOR）
 │   ├── audit.js          ← JSONL 审计日志（追加/读取/路径）
 │   └── cli.js            ← init / uninstall / doctor 交互实现
-├── test-client.mjs       ← 服务端协议冒烟
-├── test-cli.mjs          ← CLI 冒烟（临时 root，不碰真实配置）
-├── test-menu.mjs         ← 菜单按键逻辑单测（无需 TTY）
-├── test-runner.mjs       ← 护栏单测：洗白 / 封顶 / 并发 / 取消杀树 / 审计
-├── test-policy.mjs       ← 策略单测：档位分类 / 姿态裁决 / 报告
+├── test/                 ← 冒烟与单测（不入发布包）
+│   ├── test-client.mjs   ← 服务端协议冒烟
+│   ├── test-cli.mjs      ← CLI 冒烟（临时 root，不碰真实配置）
+│   ├── test-menu.mjs     ← 菜单按键逻辑单测（无需 TTY）
+│   ├── test-runner.mjs   ← 护栏单测：洗白 / 封顶 / 并发 / 取消杀树 / 审计
+│   └── test-policy.mjs   ← 策略单测：档位分类 / 姿态裁决 / 报告
 ├── .gitignore
 └── docs/
     ├── DESIGN.md
@@ -38,13 +39,13 @@ agent-git-bash/
 | 命令 | 作用 |
 |---|---|
 | `node bin/gitbash-mcp.js` | 前台起 MCP server（stdio） |
-| `node test-client.mjs` | 服务端协议冒烟（必须能 spawn bash） |
-| `node test-cli.mjs` | CLI 冒烟（临时 root，不碰真实配置） |
-| `node test-menu.mjs` | 菜单按键逻辑单测（无需 TTY） |
-| `node test-runner.mjs` | 护栏单测（洗白 / 封顶 / 并发 / 取消 / 审计） |
+| `node test/test-client.mjs` | 服务端协议冒烟（必须能 spawn bash） |
+| `node test/test-cli.mjs` | CLI 冒烟（临时 root，不碰真实配置） |
+| `node test/test-menu.mjs` | 菜单按键逻辑单测（无需 TTY） |
+| `node test/test-runner.mjs` | 护栏单测（洗白 / 封顶 / 并发 / 取消 / 审计） |
 | `node bin/gitbash-mcp.js audit` | 查看审计日志 |
 | `node bin/gitbash-mcp.js policy` | 查看命令策略 |
-| `node test-policy.mjs` | 策略单测（档位 / 裁决 / 报告） |
+| `node test/test-policy.mjs` | 策略单测（档位 / 裁决 / 报告） |
 | `node bin/gitbash-mcp.js init --dry-run` | 预览会写哪些客户端配置 |
 | `npm pack --dry-run` | 检查发布内容（只含 `bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`） |
 | `npm i -g .` | 从本地仓库全局安装（发布前自测） |
@@ -72,14 +73,14 @@ agent-git-bash/
   `menu.js` / `theme.js`（交互）、`cli.js`（CLI）；`server.js` 只保留工具注册与裁决接线。
 - 菜单按键逻辑必须是**纯函数**（`reduceMenu`），以便无 TTY 单测；渲染与终端交互分开。
 - **策略不得退回正则黑名单**：`lib/policy.js` 只做能力分类，判读不了就归 `opaque` → ask。
-  改 `shell-parse.js` / `policy.js` 必须同步补 `test-policy.mjs` 用例（解析器 + 档位 + 姿态裁决）。
+  改 `shell-parse.js` / `policy.js` 必须同步补 `test/test-policy.mjs` 用例（解析器 + 档位 + 姿态裁决）。
 - 用代码运行时模板改文件时的转义约定：反引号会终止模板串、`$` + `{` 会插值（`String.raw` 也挡不住）。
   稳妥做法：先用 read 取出旧文本原样拼接成 `old_string`，再按行数组拼 `new_string`，不要在模板里内联整段文件。
 - 日志只走 stderr（stdout 是 MCP 协议通道，绝不能打印日志）。
 
 ## 完成定义（Definition of Done）
 
-- [ ] 五套测试全绿：`test-client` / `test-cli` / `test-menu` / `test-runner` / `test-policy`
+- [ ] 五套测试全绿：`test/test-client` / `test/test-cli` / `test/test-menu` / `test/test-runner` / `test/test-policy`
 - [ ] `npm pack --dry-run` 只列出源码（`bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`），不含 `docs/` 与测试文件
 - [ ] `gitbash-mcp init --dry-run` 能正确预览各客户端配置
 - [ ] 缺 bash 时服务仍能启动并给出 `BASH_NOT_FOUND` + 修复指引

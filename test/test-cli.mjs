@@ -1,12 +1,12 @@
 // CLI smoke test: exercises init/uninstall/dry-run against a temp root, so it
-// never touches the real user config. Run: node test-cli.mjs
+// never touches the real user config. Run: node test/test-cli.mjs
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const here = dirname(fileURLToPath(import.meta.url))
+const here = join(dirname(fileURLToPath(import.meta.url)), '..')
 const bin = join(here, 'bin', 'gitbash-mcp.js')
 const work = mkdtempSync(join(tmpdir(), 'gitbash-mcp-cli-'))
 const home = join(work, 'home')

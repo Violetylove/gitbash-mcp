@@ -171,11 +171,11 @@ gitbash-mcp policy         # 查看当前命令策略
 
 ~~~powershell
 node bin/gitbash-mcp.js        # 起 MCP server（stdio，不接终端）
-node test-client.mjs           # 协议冒烟：doctor / 管道 / 超时 / 截断 / 取消 / 策略 / 缺 bash
-node test-cli.mjs              # CLI 冒烟：init / uninstall / 幂等 / 备份 / audit
-node test-menu.mjs             # 菜单按键逻辑（无需 TTY）
-node test-runner.mjs           # 护栏：洗白 / 封顶 / 并发 / 取消杀树 / 审计轮转
-node test-policy.mjs           # 策略：档位分类 / 姿态裁决
+node test/test-client.mjs      # 协议冒烟：doctor / 管道 / 超时 / 截断 / 取消 / 策略 / 缺 bash
+node test/test-cli.mjs         # CLI 冒烟：init / uninstall / 幂等 / 备份 / audit
+node test/test-menu.mjs        # 菜单按键逻辑（无需 TTY）
+node test/test-runner.mjs      # 护栏：洗白 / 封顶 / 并发 / 取消杀树 / 审计轮转
+node test/test-policy.mjs      # 策略：档位分类 / 姿态裁决
 npm test                       # 一次跑完五套
 gitbash-mcp init --dry-run     # 预览会写哪些客户端配置
 npm pack --dry-run             # 检查发布内容（只含源码，不含 docs/ 与测试）

@@ -30,7 +30,8 @@
   ],
   "scripts": {
     "start": "node bin/gitbash-mcp.js",
-    "test": "node test-client.mjs && node test-cli.mjs && node test-menu.mjs && node test-runner.mjs && node test-policy.mjs"
+    "test": "node test/test-client.mjs && node test/test-cli.mjs && node test/test-menu.mjs && node test/test-runner.mjs && node test/test-policy.mjs",
+    "prepublishOnly": "npm test"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

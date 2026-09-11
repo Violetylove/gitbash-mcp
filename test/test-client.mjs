@@ -1,5 +1,5 @@
 // gitbash-mcp smoke test: drive the MCP server over stdio with the official SDK client.
-// Run: node test-client.mjs   (or: bun test-client.mjs)
+// Run: node test/test-client.mjs   (or: bun test/test-client.mjs)
 // Asserts the result contract of exec, timeout tree-kill, output spill, and doctor.
 // NOTE: this test spawns bash.exe and uses pipes, so it must run OUTSIDE a
 // restricted sandbox (any normal shell works).
@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
-const cwd = dirname(fileURLToPath(import.meta.url))
+const cwd = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Keep the server's audit log inside a temp dir so the real one is never touched.
 const auditHome = mkdtempSync(join(tmpdir(), 'gbm-client-audit-'))
 const transport = new StdioClientTransport({

@@ -1,12 +1,12 @@
 // P0 guardrail tests: env scrubbing, capped spill, bounded concurrency,
-// cancellation kills the tree, and the audit log. Run: node test-runner.mjs
+// cancellation kills the tree, and the audit log. Run: node test/test-runner.mjs
 import { Readable } from 'node:stream'
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { scrubEnv, collectStream, createSemaphore, spawnBash } from './lib/runner.js'
-import { appendAudit, readAudit, auditPath } from './lib/audit.js'
-import { detectBash } from './lib/detect.js'
+import { scrubEnv, collectStream, createSemaphore, spawnBash } from '../lib/runner.js'
+import { appendAudit, readAudit, auditPath } from '../lib/audit.js'
+import { detectBash } from '../lib/detect.js'
 
 let failures = 0
 function assert(cond, label, detail) {
