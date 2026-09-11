@@ -63,8 +63,9 @@ MCP 客户端（DSH / Claude Code / Codex）
   "audit_id": "...",       // 该次调用的审计记录 id
   "policy": {              // 允许执行时附带的裁决信息
     "decision": "allow",   // 'allow' | 'allow-risky'
-    "tier": "safe",        // safe | suspicious | dangerous | catastrophic
+    "tier": "read-only",   // read-only | project | ask-required | dangerous | catastrophic
     "stance": "ask",       // 来自 GITBASH_MCP_RISKY
+    "reason": "every segment is read-only",
     "matched_rules": []
   },
   "error_code": "APPROVAL_REQUIRED", // 被策略拦住时：APPROVAL_REQUIRED | POLICY_DENIED
@@ -156,16 +157,27 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 > 关键教训（实测）：`taskkill /T /F` 本身有效，但**被杀的 MSYS2 孙进程可能继续持有 stdio 管道**，
 > 把 `close` 事件拖到子进程自然结束。因此杀完后必须在有界宽限内直接结算，不能只等 `close`。
 
-这些是"降低误伤"的护栏，**不是安全边界**（正则/资源限制都挡不住蓄意绕过）。真正的隔离只能在 OS 层。
+这些是"降低误伤"的护栏，**不是安全边界**（分类器再细也挡不住蓄意绕过：`r''m`、`$IFS`、`base64 -d|bash` 等）。真正的隔离只能在 OS 层。
 
-### 5.8 命令策略（P1，单开关）
+### 5.8 命令策略（P1，单开关，能力分类 / 模型 D）
 
-三档分类（`lib/policy.js`，纯函数）：`catastrophic` / `dangerous` / `suspicious`；
-其中 `rm` **用结构化解析**（提取 flag 与目标）而不是正则——`rm -rf` / `rm -fr` / `rm --recursive` 的写法太多，
-正则漏判过一次（`rm -rf ./x` 曾判成 safe），这个 bug 由 `test-policy.mjs` 的 32 个用例钉住。
+不做正则黑名单，做**能力分类**（`lib/shell-parse.js` 解析 + `lib/policy.js` 裁决，两者都是纯函数）：
 
-裁决：`safe`/`suspicious` → 放行（后者在结果里标注 tier）；`dangerous` → 默认 `ask-required`（返回 `APPROVAL_REQUIRED`，
-指引模型去问用户）；`catastrophic` → 默认 `deny`（`POLICY_DENIED`）；当 `GITBASH_MCP_RISKY=allow` 时两者都放行并标注 `allow-risky`。
+1. **解析** `parseCommand`：去引号与反斜杠转义、按 `&& || ; | & 换行` 切段、记录重定向目标；
+   here-doc 正文整体跳过（它是数据不是命令）；`$( )`、反引号、`$'…'`、变量当程序名、`( )` 子 shell、未闭合引号 → 标记 `opaque`。
+2. **逐段判定能力**：`read-only`（内置 ~85 个程序 + 27 个 git 只读子命令）/ `project`（项目自己声明的入口）/ `mutating` / `unknown` / `opaque` / `catastrophic`。
+3. **汇总裁决**：`catastrophic` → deny；`opaque`/`mutating`/`unknown` → ask-required；全部 read-only 或 project → allow。
+
+**项目声明的信任**（替代白名单文件）：`projectEntry(cwd)` 向上最多 6 层找 `package.json` scripts、`Makefile` 目标、
+`justfile` recipe，并只匹配 `npm run <name>` / `make <target>` / `just <recipe>` 这类形式；项目改了脚本就等于改了自己的白名单，
+不引入任何需要人维护的清单文件。
+
+**结构化优先于正则**：`rm -rf`/`-fr`/`--recursive` 靠提取 flag 与目标判定。早期逐行 `^rm` 匹配时，多行脚本
+`cd /tmp` 换行 `rm -rf /` 被判成 safe（`^` 少了 `/m`），这个 bug 由 `test-policy.mjs` 钉住；here-doc 正文也曾被当成命令
+（`cat <<EOF` + `rm -rf /` 误判 catastrophic），修好后正文直接跳过。
+
+`read-only`/`project` → 放行（结果里带 `policy.tier`）；其余默认 `ask-required`（`APPROVAL_REQUIRED`，指引模型去问用户）/
+`deny`（`POLICY_DENIED`）；`GITBASH_MCP_RISKY=allow` 时全部放行并标注 `allow-risky`。
 
 **不实现 in-band 批准码**：模型拥有同一个 shell，它能跑任何它能提交的批准命令。唯一不可伪造的同意通道是 MCP 的启动配置。
 新增 `policy` 工具输出完整规则与当前姿态，供模型向用户解释。
@@ -181,7 +193,7 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 ## 6. 分发与配置
 
 发布：`npm pack --dry-run` 只应包含源码 —— `bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`
-（当前 12 个文件、打包约 24KB），不含 `docs/` 与测试文件；
+（当前 13 个文件、打包约 29KB），不含 `docs/` 与测试文件；
 完整步骤见 `docs/NPM_PUBLISH.md`（本地文件，不入库）。
 
 配置：`gitbash-mcp init` 交互式写入各客户端配置（见 §4.4）；也可手动把命令写成 `gitbash-mcp`、参数留空。

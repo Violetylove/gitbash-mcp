@@ -15,10 +15,11 @@ agent-git-bash/
 ├── lib/
 │   ├── detect.js         ← bash 检测 + doctor 报告（server 与 CLI 共用）
 │   ├── runner.js         ← spawn + 输出截断/spill
+│   ├── shell-parse.js    ← 命令解析（纯函数：切段 / 去引号 / 标记 opaque）
+│   ├── policy.js         ← 能力分类 + 项目声明信任（纯函数，单一人类同意开关）
 │   ├── menu.js           ← 备用屏幕勾选菜单（纯 reducer，可单测）
 │   ├── theme.js          ← ANSI 着色与转义序列（尊重 NO_COLOR）
 │   ├── audit.js          ← JSONL 审计日志（追加/读取/路径）
-│   ├── policy.js         ← 命令策略引擎（三档 + 单一人同意开关）
 │   └── cli.js            ← init / uninstall / doctor 交互实现
 ├── test-client.mjs       ← 服务端协议冒烟
 ├── test-cli.mjs          ← CLI 冒烟（临时 root，不碰真实配置）
@@ -67,9 +68,13 @@ agent-git-bash/
 
 - 纯 JS + ESM（`"type": "module"`），Node >= 18，同时兼容 Bun。**不用 TypeScript**：
   避免构建步骤，保持 `bin` 能被 Node 直接执行。
-- 共享逻辑放 `lib/`：`detect.js`（检测）、`runner.js`（子进程+护栏）、`policy.js`（策略）、`audit.js`（审计）、
+- 共享逻辑放 `lib/`：`detect.js`（检测）、`runner.js`（子进程+护栏）、`shell-parse.js`（解析）、`policy.js`（策略）、`audit.js`（审计）、
   `menu.js` / `theme.js`（交互）、`cli.js`（CLI）；`server.js` 只保留工具注册与裁决接线。
 - 菜单按键逻辑必须是**纯函数**（`reduceMenu`），以便无 TTY 单测；渲染与终端交互分开。
+- **策略不得退回正则黑名单**：`lib/policy.js` 只做能力分类，判读不了就归 `opaque` → ask。
+  改 `shell-parse.js` / `policy.js` 必须同步补 `test-policy.mjs` 用例（解析器 + 档位 + 姿态裁决）。
+- 用代码运行时模板改文件时的转义约定：反引号会终止模板串、`$` + `{` 会插值（`String.raw` 也挡不住）。
+  稳妥做法：先用 read 取出旧文本原样拼接成 `old_string`，再按行数组拼 `new_string`，不要在模板里内联整段文件。
 - 日志只走 stderr（stdout 是 MCP 协议通道，绝不能打印日志）。
 
 ## 完成定义（Definition of Done）

@@ -17,7 +17,9 @@ const transport = new StdioClientTransport({
   command: process.execPath,
   args: [join(cwd, 'server.js')],
   cwd,
-  env: { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome },
+  // The contract suite runs under stance=allow; policy behaviour is asserted
+  // separately below with a default-stance server.
+  env: { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome, GITBASH_MCP_RISKY: 'allow' },
 })
 const client = new Client({ name: 'gitbash-mcp-test', version: '1.0.0' })
 
@@ -140,46 +142,74 @@ try {
   step('calling policy')
   const rpol = await client.callTool({ name: 'policy', arguments: {} })
   const tpol = rpol.content[0].text
-  assert(tpol.includes('stance        : ask'), 'policy reports the default ask stance', tpol.slice(0, 90))
-  assert(tpol.includes('catastrophic rules'), 'policy lists the rule tiers')
+  assert(tpol.includes('stance        : allow'), 'the contract suite server reports stance allow', tpol.slice(0, 90))
+  assert(tpol.includes('not a regex denylist'), 'policy describes the classification model', tpol.slice(0, 120))
+  assert(tpol.includes('not a security boundary'), 'policy states the honest limitation')
 
-  console.log('== policy: dangerous command is blocked under ask ==')
+  console.log('== policy: a default-stance server asks before dangerous commands ==')
+  const askEnv = { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome }
+  const t3 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'server.js')], cwd, env: askEnv })
+  const c3 = new Client({ name: 'gitbash-mcp-test-ask', version: '1.0.0' })
+  await c3.connect(t3)
+  const rpolAsk = await c3.callTool({ name: 'policy', arguments: {} })
+  assert(rpolAsk.content[0].text.includes('stance        : ask'), 'a default server reports the ask stance')
+
   const victim = mkdtempSync(join(tmpdir(), 'gbm-victim-'))
   writeFileSync(join(victim, 'keep.txt'), 'x')
   const victimPosix = victim.replace(/[\\]/g, '/')
   step('calling exec with a recursive delete')
-  const rp = await client.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
+  const rp = await c3.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
   const jp = JSON.parse(rp.content[0].text)
-  assert(jp.error_code === 'APPROVAL_REQUIRED', 'dangerous command asks the user', jp.error_code)
+  assert(jp.error_code === 'APPROVAL_REQUIRED', 'a dangerous command asks the user', jp.error_code)
   assert(jp.category === 'dangerous', 'category is dangerous', jp.category)
   assert(Array.isArray(jp.matched_rules) && jp.matched_rules.length > 0, 'matched rules are reported', jp.matched_rules)
   assert(String(jp.hint).includes('Blocked'), 'hint explains the block', jp.hint)
   assert(existsSync(victim), 'the blocked command never ran')
 
   console.log('== policy: catastrophic is denied outright ==')
-  const rc = await client.callTool({ name: 'exec', arguments: { command: 'mkfs.ext4 /dev/sda1' } })
+  const rc = await c3.callTool({ name: 'exec', arguments: { command: 'mkfs.ext4 /dev/sda1' } })
   const jc = JSON.parse(rc.content[0].text)
   assert(jc.error_code === 'POLICY_DENIED', 'catastrophic returns POLICY_DENIED', jc.error_code)
   assert(jc.category === 'catastrophic', 'category is catastrophic', jc.category)
 
-  console.log('== policy: suspicious runs but is flagged ==')
-  const rs = await client.callTool({ name: 'exec', arguments: { command: 'eval "echo suspicious-ran"' } })
-  const js = JSON.parse(rs.content[0].text)
-  assert(js.exit_code === 0, 'suspicious command runs', js.exit_code)
-  assert(js.policy && js.policy.tier === 'suspicious', 'result flags the suspicious tier', js.policy)
+  console.log('== policy: opaque constructs ask instead of guessing ==')
+  const opaqueProbes = ['eval "echo nope"', 'bash -c "echo nope"', "rm$x -rf /"]
+  for (const probe of opaqueProbes) {
+    const ro = await c3.callTool({ name: 'exec', arguments: { command: probe } })
+    const jo = JSON.parse(ro.content[0].text)
+    assert(jo.error_code === 'APPROVAL_REQUIRED', 'opaque asks: ' + probe, jo.error_code)
+    assert(jo.category === 'opaque' || jo.category === 'ask-required', 'opaque is not labelled safe: ' + probe, jo.category)
+  }
+  assert(existsSync(victim), 'no opaque probe ran')
+
+  console.log('== policy: read-only commands run under the default stance ==')
+  const rro = await c3.callTool({ name: 'exec', arguments: { command: 'git status --porcelain && echo read-only-ran' } })
+  const jro = JSON.parse(rro.content[0].text)
+  assert(jro.exit_code === 0, 'a read-only chain runs', jro.exit_code)
+  assert(jro.policy && jro.policy.tier === 'read-only', 'the result records the read-only tier', jro.policy)
+
+  console.log('== policy: project-declared entries are trusted, undeclared ones are not ==')
+  const projDir = mkdtempSync(join(tmpdir(), 'gbm-proj-'))
+  writeFileSync(join(projDir, 'package.json'), JSON.stringify({ name: 'gbm-proj', version: '1.0.0', private: true, scripts: { hello: 'echo project-entry-ran' } }))
+  const t4 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'server.js')], cwd: projDir, env: askEnv })
+  const c4 = new Client({ name: 'gitbash-mcp-test-project', version: '1.0.0' })
+  await c4.connect(t4)
+  const rproj = await c4.callTool({ name: 'exec', arguments: { command: 'npm run hello' } })
+  const jproj = JSON.parse(rproj.content[0].text)
+  assert(jproj.exit_code === 0, 'a declared project script runs', jproj.exit_code)
+  assert(jproj.policy && jproj.policy.tier === 'project', 'the result records the project tier', jproj.policy)
+  assert(String(jproj.stdout).includes('project-entry-ran'), 'the script really produced its output', jproj.stdout)
+  const runknown = await c4.callTool({ name: 'exec', arguments: { command: 'npm run not-declared' } })
+  const junknown = JSON.parse(runknown.content[0].text)
+  assert(junknown.error_code === 'APPROVAL_REQUIRED', 'an undeclared script still asks', junknown.error_code)
 
   console.log('== policy: stance=allow runs the dangerous command ==')
-  const allowEnv = { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome, GITBASH_MCP_RISKY: 'allow' }
-  const t3 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'server.js')], cwd, env: allowEnv })
-  const c3 = new Client({ name: 'gitbash-mcp-test-allow', version: '1.0.0' })
-  await c3.connect(t3)
-  const ra = await c3.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
+  const ra = await client.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
   const ja = JSON.parse(ra.content[0].text)
-  assert(ja.exit_code === 0, 'allow stance ran the command', ja.exit_code)
-  assert(ja.policy && ja.policy.decision === 'allow-risky', 'result records allow-risky', ja.policy)
+  assert(ja.exit_code === 0, 'the allow-stance server ran the command', ja.exit_code)
+  assert(ja.policy && ja.policy.decision === 'allow-risky', 'the result records allow-risky', ja.policy)
   assert(!existsSync(victim), 'the directory was really removed')
-  const rpol2 = await c3.callTool({ name: 'policy', arguments: {} })
-  assert(rpol2.content[0].text.includes('stance        : allow'), 'second server reports the allow stance')
+  await c4.close()
   await c3.close()
 
   console.log('== missing bash: structured BASH_NOT_FOUND ==')

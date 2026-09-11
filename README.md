@@ -114,18 +114,26 @@ gitbash-mcp policy         # 查看当前命令策略
 > **诚实声明**：这些是『降低误伤与明显滥用』的护栏，**不是安全边界**——它挡不住蓄意绕过（`r''m`、`$IFS`、
 > `base64 -d|bash` 等）。真正的隔离只能在 OS 层做（低权限账户 / 容器 / VM）。
 
-## 命令策略（P1，一个开关）
+## 命令策略（P1，一个开关，能力分类而非黑名单）
 
-按危险程度分三档，只由**一个**环境变量控制（写在 MCP 客户端配置里，模型改不了）：
+不是"危险命令黑名单"，而是**能力分类**：先把命令解析成若干简单命令（去引号、切管道、跳过 here-doc 正文），
+再逐段判定能力；只有当**每一段都可读或由项目自己声明**、且没有不可判读的构造时才自动放行。
+只由**一个**环境变量控制（写在 MCP 客户端配置里，模型改不了；改完要重启服务器）：
 
-| 档位 | 例子 | `GITBASH_MCP_RISKY=ask`（默认） | `=allow` |
+| 判定 | 例子 | `GITBASH_MCP_RISKY=ask`（默认） | `=allow` |
 |---|---|---|---|
-| catastrophic | `mkfs`、`diskpart`、`rm -rf /`、`shutdown` | 拒绝（`POLICY_DENIED`） | 放行 + 审计 |
-| dangerous | `rm -rf ./x`、`git push --force`、`curl \| bash`、`npm publish` | **拦住，让你决定**（`APPROVAL_REQUIRED`） | 放行 + 审计 |
-| suspicious | `eval`、`base64 -d \| sh`、`nc`、`env \| curl` | 放行 + 审计 + 结果标注 | 同左 |
+| read-only | `ls`、`cat`、`grep`、`jq`、`git status`/`log`/`diff` | 放行 | 放行 |
+| project | 项目自己声明的入口：package.json scripts、Makefile 目标、justfile recipe、`cargo test` 等 | 放行 | 放行 |
+| mutating / unknown | `rm -rf ./x`、`npm install`、`git push --force`、`curl \| bash`、`npm publish` | **拦住，让你决定**（`APPROVAL_REQUIRED`） | 放行 + 审计 |
+| opaque | `eval`、`bash -c`、`$(...)`、`$'…'`、变量当程序名、`(...)` 子 shell | 同上（证明不了安全就不猜） | 放行 + 审计 |
+| catastrophic | `mkfs`、`diskpart`、`rm -rf /`、`shutdown`、fork bomb | 拒绝（`POLICY_DENIED`） | 放行 + 审计 |
 
 被拦住时模型会拿到明确指引：① 让你自己在终端跑 ② 换更安全的写法 ③ 你改配置加 `GITBASH_MCP_RISKY=allow` 并重启。
 查看当前策略：`gitbash-mcp policy`，或让模型调 `policy` 工具。
+
+> **为什么不用正则黑名单**：黑名单要为每一种危险写法留一条规则，漏一条就漏一片——实测多行脚本
+> `cd /tmp` 换行 `rm -rf /` 曾被判 safe，而 `echo "git push --force"` 这类纯文本又被误伤。
+> 所以改成「凡不能证明安全就交给人」。
 
 > **为什么没有\"批准码\"**：模型拥有同一个 shell——任何它能提交的批准它也能伪造。唯一不可伪造的同意，是你在**启动配置**里的选择。
 

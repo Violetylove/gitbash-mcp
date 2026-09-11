@@ -1,6 +1,6 @@
 # gitbash-mcp 项目计划书
 
-> 状态：M0–M10 完成；只剩发布（阻塞在账号 2FA）。代码契约以 `docs/DESIGN.md` 为准。
+> 状态：M0–M10 完成（M10 已从三档正则升级为**能力分类 / 模型 D**）；只剩发布（阻塞在账号 2FA）。代码契约以 `docs/DESIGN.md` 为准。
 
 ## 已完成
 
@@ -16,7 +16,7 @@
 | M7 | 交互式安装器 | `init` / `uninstall` / `doctor` + 备用屏幕勾选菜单（6 客户端） |
 | M8 | git + 首发准备 | git 初始化、`docs/NPM_PUBLISH.md` |
 | M9 | P0 护栏 | 取消即杀 / 并发上限 / 双重封顶 / 环境洗白 / 审计日志（零配置） |
-| M10 | P1 策略引擎 | 三档规则（`rm` 走结构化解析）+ 单开关 `GITBASH_MCP_RISKY` + `policy` 工具 |
+| M10 | P1 策略引擎 | 能力分类（`shell-parse.js` 解析 + 逐段判定 + 项目声明信任，取代正则黑名单）+ 单开关 `GITBASH_MCP_RISKY` + `policy` 工具 |
 
 ## 未完成
 
@@ -29,7 +29,7 @@
 
 ### M12（可选）：P2 加固
 
-- `GITBASH_MCP_ENV=safe` 白名单模式（当前是内置换白，够用）
+- ~~`GITBASH_MCP_ENV=safe` 白名单模式~~ 已由模型 D 的「项目声明信任」取代：不引入需要人维护的清单文件
 - `bash -r` 受限模式（软限制，会破正常用法，默认关）
 - `readonly` 策略预设
 

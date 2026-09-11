@@ -82,8 +82,8 @@ server.registerTool(
     }
     const auditId = newAuditId()
     const cwd = typeof args.cwd === 'string' ? args.cwd : process.cwd()
-    const verdict = decide(args.command)
-    const matchedRules = verdict.matched.map((m) => m.rule)
+    const verdict = decide(args.command, { cwd })
+    const matchedRules = verdict.matched
 
     if (verdict.decision === 'deny' || verdict.decision === 'ask-required') {
       const lines = []
@@ -91,6 +91,7 @@ server.registerTool(
         ? 'Blocked by the command policy (this tier is never run at the current stance).'
         : 'Blocked by the command policy: this needs the user to decide.')
       lines.push('tier: ' + verdict.tier + '   stance: GITBASH_MCP_RISKY=' + verdict.stance)
+      lines.push('why : ' + verdict.reason)
       if (matchedRules.length > 0) lines.push('matched: ' + matchedRules.join(', '))
       lines.push('')
       lines.push('Ask the user how to proceed. Their options:')
@@ -101,6 +102,7 @@ server.registerTool(
         stderr: lines.join(String.fromCharCode(10)),
         error_code: verdict.decision === 'deny' ? 'POLICY_DENIED' : 'APPROVAL_REQUIRED',
         category: verdict.tier,
+        reason: verdict.reason,
         matched_rules: matchedRules,
         hint: lines[0],
         audit_id: auditId,
@@ -129,14 +131,14 @@ server.registerTool(
     const r = gated.value
     appendAudit({
       id: auditId, ts: new Date().toISOString(), tool: 'exec', decision: verdict.decision,
-      tier: verdict.tier, matched_rules: matchedRules, command: args.command, cwd,
+      tier: verdict.tier, reason: verdict.reason, matched_rules: matchedRules, command: args.command, cwd,
       exit_code: r.exit_code, duration_ms: r.duration_ms, queued_ms: gated.queuedMs,
       timed_out: r.timed_out, killed_by: r.killed_by, truncated: r.truncated, spill_truncated: r.spill_truncated,
     })
     const payload = Object.assign({}, r, {
       audit_id: auditId,
       queued_ms: gated.queuedMs,
-      policy: { decision: verdict.decision, tier: verdict.tier, stance: verdict.stance, matched_rules: matchedRules },
+      policy: { decision: verdict.decision, tier: verdict.tier, stance: verdict.stance, reason: verdict.reason, matched_rules: matchedRules },
     })
     return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] }
   },
