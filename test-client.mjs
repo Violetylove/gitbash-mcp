@@ -7,13 +7,17 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 
 const cwd = dirname(fileURLToPath(import.meta.url))
+// Keep the server's audit log inside a temp dir so the real one is never touched.
+const auditHome = mkdtempSync(join(tmpdir(), 'gbm-client-audit-'))
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [join(cwd, 'server.js')],
   cwd,
+  env: { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome },
 })
 const client = new Client({ name: 'gitbash-mcp-test', version: '1.0.0' })
 
@@ -56,6 +60,10 @@ try {
   assert(String(j1.stdout).includes('hello-mcp'), 'stdout contains hello-mcp', j1.stdout)
   assert(String(j1.stdout).includes('git version'), 'stdout contains git version', j1.stdout)
   assert(j1.timed_out === false && j1.truncated === false && j1.spill_path === null, 'default flags', j1)
+  assert(typeof j1.audit_id === 'string' && j1.audit_id.length > 0, 'result carries an audit_id', j1.audit_id)
+  assert(j1.killed_by === null, 'a normal run is not attributed to a kill', j1.killed_by)
+  assert(typeof j1.duration_ms === 'number' && j1.duration_ms >= 0, 'duration_ms reported', j1.duration_ms)
+  assert(j1.queued_ms === 0, 'an unqueued run reports queued_ms 0', j1.queued_ms)
 
   console.log('== exec: pipeline (bash pipes work here) ==')
   step('calling exec pipeline')
@@ -76,6 +84,7 @@ try {
   const j4 = JSON.parse(r4.content[0].text)
   assert(j4.timed_out === true, 'timed_out === true', j4)
   assert(typeof j4.exit_code === 'number', 'exit_code is a number', j4)
+  assert(j4.killed_by === 'timeout', 'timeout is attributed as killed_by timeout', j4.killed_by)
 
   console.log('== exec: output spill over 64KB cap ==')
   step('calling exec spill')
@@ -109,6 +118,23 @@ try {
   }
   assert(raised, 'empty command surfaces as an error result', raised)
 
+  console.log('== cancellation: aborting a tool call kills the tree ==')
+  step('calling exec then aborting')
+  const ctl = new AbortController()
+  const abortStart = Date.now()
+  const pending = client.callTool({ name: 'exec', arguments: { command: 'sleep 30', timeout_ms: 60000 } }, undefined, { signal: ctl.signal })
+  setTimeout(() => ctl.abort(), 500)
+  let abortRejected = false
+  let abortElapsed = 0
+  try {
+    await pending
+  } catch (e) {
+    abortRejected = true
+  }
+  abortElapsed = Date.now() - abortStart
+  assert(abortRejected, 'the aborted call rejects instead of returning', abortElapsed)
+  assert(abortElapsed < 6000, 'the abort settles promptly, not after the 30s sleep', abortElapsed)
+
   console.log('== missing bash: structured BASH_NOT_FOUND ==')
   step('spawning a second server with no reachable bash')
   const t2 = new StdioClientTransport({
@@ -134,6 +160,7 @@ try {
   const r9 = await c2.callTool({ name: 'doctor', arguments: {} })
   assert(r9.content[0].text.includes('bash         : NOT FOUND'), 'doctor reports bash NOT FOUND', r9.content[0].text.slice(0, 240))
   await c2.close()
+  try { rmSync(auditHome, { recursive: true, force: true }) } catch (e) { void e }
   step('missing-bash server closed')
 
   clearTimeout(watchdog)

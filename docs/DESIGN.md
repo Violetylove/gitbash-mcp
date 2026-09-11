@@ -55,6 +55,12 @@ MCP 客户端（DSH / Claude Code / Codex）
   "timed_out": false,
   "truncated": false,
   "spill_path": null,     // 有截断时指向 %TEMP%\gitbash-mcp\ 的全量日志
+  "spill_bytes": 0,       // 已写入 spill 的字节数
+  "spill_truncated": false, // spill 文件本身是否封顶截断
+  "duration_ms": 123,      // 实际耗时
+  "killed_by": null,       // 'cancel' | 'timeout' | null
+  "queued_ms": 0,          // 因并发上限而排队的时间
+  "audit_id": "...",       // 该次调用的审计记录 id
   "error_code": "BASH_NOT_FOUND",  // 仅缺 bash 时出现
   "hint": "..."                     // 仅缺 bash 时出现
 }
@@ -125,7 +131,25 @@ spill 写入完成后才 resolve，另有 5 秒强制兜底，保证调用永不
 进程在沙箱外运行，权限 = 启动它的 agent 进程的完整用户权限；无文件沙箱。
 模型可无门槛调用 `exec`——这是 MCP 桥的既有模型，不在本工程内自造审批/降权。
 
-### 5.7 分发：全局安装，不做 exe
+### 5.7 护栏（P0，零配置）
+
+git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。P0 的目标不是"防住攻击者"（做不到），
+而是**修掉自身缺陷 + 把危险留给人类决定 + 全程可审计**：
+
+| 机制 | 实现 | 常量 |
+|---|---|---|
+| 取消即杀 | `RequestHandlerExtra.signal` → `taskkill /T /F`；杀掉后给 1.5s 宽限，不等孤儿进程占着的管道 | — |
+| 并发上限 | `createSemaphore` FIFO 排队，结果报 `queued_ms` | `MAX_CONCURRENCY = 4` |
+| 输出封顶 | 内存 64KB + spill 文件封顶 | `OUTPUT_CAP_BYTES = 64KB`、`SPILL_CAP_BYTES = 64MB` |
+| 环境洗白 | spawn 前清掉凭据形状变量（`*_TOKEN`/`*_API_KEY`/`AWS_*`/`*PASSWORD*`），保留 `SSH_AUTH_SOCK` | — |
+| 审计 | 每次调用追加 JSONL，`gitbash-mcp audit` 读取 | — |
+
+> 关键教训（实测）：`taskkill /T /F` 本身有效，但**被杀的 MSYS2 孙进程可能继续持有 stdio 管道**，
+> 把 `close` 事件拖到子进程自然结束。因此杀完后必须在有界宽限内直接结算，不能只等 `close`。
+
+这些是"降低误伤"的护栏，**不是安全边界**（正则/资源限制都挡不住蓄意绕过）。真正的隔离只能在 OS 层。
+
+### 5.8 分发：全局安装，不做 exe
 `bin: { gitbash-mcp: server.js }`，shebang `#!/usr/bin/env node`，用户 `npm i -g gitbash-mcp`。
 `bun build --compile` 会内嵌整个 Bun 运行时（实测 108.82MB），全局安装只需用户已有的 Node，
 安装体积约 14MB（依赖 13.85MB）。
@@ -162,7 +186,11 @@ DSH 也可用面板插件注册。
 `node test-cli.mjs` 覆盖 CLI：help/version/doctor、`--dry-run` 不落盘、init 写入并保留既有内容、备份生成、
 **二次 init 幂等**、uninstall 只删自己的条目、`--yes` 选择已检测客户端；全部在临时 root 中进行，不碰真实配置。
 
-> 两套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
+`node test-runner.mjs` 单测 P0 护栏：环境洗白的保留/剔除清单、spill 内存与磁盘双重封顶、
+信号量并发峰值与 `queuedMs`、**取消后进程树确实死亡**（用延迟写入的标记文件验证）、审计 JSONL 往返。
+
+> 四套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
+> 审计写入用临时 `LOCALAPPDATA`，不会污染真实日志。
 
 ## 9. 变更纪律
 

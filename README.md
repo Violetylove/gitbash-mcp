@@ -36,6 +36,7 @@ gitbash-mcp init           # 交互式勾选菜单
 gitbash-mcp init --yes     # 免交互，配置所有检测到的客户端
 gitbash-mcp init --no-tui  # 纯文本编号输入（非 TTY 环境会自动切换）
 gitbash-mcp uninstall      # 反向移除
+gitbash-mcp audit          # 查看最近的命令审计日志
 ~~~
 
 菜单操作：`↑/↓`（或 `k/j`）移动光标，`空格` 勾选/取消，`a` 全选，`n` 全不选，`1-9` 跳到并切换该项，`回车` 确认，`q`/`Esc`/`Ctrl-C` 取消。
@@ -93,6 +94,24 @@ gitbash-mcp uninstall      # 反向移除
 
 完整环境诊断：所有探测过的候选路径、命中的那个、`GITBASH_BASH` 的值是否有效、git 是否在 PATH、
 以及找不到时的修复步骤。**bash 相关异常先调它。**
+
+## 护栏（P0，零配置）
+
+装好即生效，不需要任何开关：
+
+| 机制 | 行为 |
+|---|---|
+| **取消即杀** | 工具调用被取消时，整棵进程树被 `taskkill /T /F` 杀掉，结果标记 `killed_by: cancel` |
+| **并发上限** | 最多 4 条命令同时运行，其余排队并在结果里报 `queued_ms` |
+| **输出上限** | 单流内存 64KB；超出部分写入 spill 文件，该文件本身也**封顶 64MB** |
+| **环境洗白** | 交给 bash 之前清掉凭据形状的变量（`*_TOKEN`、`*_API_KEY`、`AWS_*`、`*PASSWORD*` 等），`SSH_AUTH_SOCK` 保留 |
+| **审计日志** | 每次调用追加一行 JSONL；`gitbash-mcp audit [-n 20]` 查看 |
+
+`exec` 的结果因此多了这些字段：`duration_ms`、`killed_by`（cancel / timeout / null）、`queued_ms`、
+`spill_bytes`、`spill_truncated`、`audit_id`。
+
+> **诚实声明**：这些是『降低误伤与明显滥用』的护栏，**不是安全边界**——它挡不住蓄意绕过（`r''m`、`$IFS`、
+> `base64 -d|bash` 等）。真正的隔离只能在 OS 层做（低权限账户 / 容器 / VM）。
 
 ## 故障排查
 

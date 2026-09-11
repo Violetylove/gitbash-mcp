@@ -17,10 +17,12 @@ agent-git-bash/
 │   ├── runner.js         ← spawn + 输出截断/spill
 │   ├── menu.js           ← 备用屏幕勾选菜单（纯 reducer，可单测）
 │   ├── theme.js          ← ANSI 着色与转义序列（尊重 NO_COLOR）
+│   ├── audit.js          ← JSONL 审计日志（追加/读取/路径）
 │   └── cli.js            ← init / uninstall / doctor 交互实现
 ├── test-client.mjs       ← 服务端协议冒烟
 ├── test-cli.mjs          ← CLI 冒烟（临时 root，不碰真实配置）
 ├── test-menu.mjs         ← 菜单按键逻辑单测（无需 TTY）
+├── test-runner.mjs       ← 护栏单测：洗白 / 封顶 / 并发 / 取消杀树 / 审计
 ├── .gitignore
 └── docs/
     ├── DESIGN.md
@@ -36,6 +38,8 @@ agent-git-bash/
 | `node test-client.mjs` | 服务端协议冒烟（必须能 spawn bash） |
 | `node test-cli.mjs` | CLI 冒烟（临时 root，不碰真实配置） |
 | `node test-menu.mjs` | 菜单按键逻辑单测（无需 TTY） |
+| `node test-runner.mjs` | 护栏单测（洗白 / 封顶 / 并发 / 取消 / 审计） |
+| `node bin/gitbash-mcp.js audit` | 查看审计日志 |
 | `node bin/gitbash-mcp.js init --dry-run` | 预览会写哪些客户端配置 |
 | `npm pack --dry-run` | 检查发布内容（只含 `bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`） |
 | `npm i -g .` | 从本地仓库全局安装（发布前自测） |
@@ -48,7 +52,8 @@ agent-git-bash/
 3. **启动永不失败**：bash 探测必须惰性 + 缓存；缺 bash 时服务照常起，由 `exec` / `doctor` 报错。
 4. **`command` 作为单个 argv** 传给 `bash -c/-lc`，不要引入引号转义层。
 5. **超时杀整棵树**：`taskkill /pid <pid> /T /F`，只杀父进程会留 MSYS2 孤儿。
-6. **只支持全局安装**：不提供 npx/bunx 方式；`package.json` 的 `files` 白名单必须保持精简。
+6. **护栏必须零配置**：并发/封顶/洗白/审计都由代码常量决定，不新增环境变量；唯一允许的开关是 P1 的 `GITBASH_MCP_RISKY`（人类的同意）。
+7. **只支持全局安装**：不提供 npx/bunx 方式；`package.json` 的 `files` 白名单必须保持精简。
 
 ## 安全边界（对外说明必须包含）
 
@@ -65,7 +70,7 @@ agent-git-bash/
 
 ## 完成定义（Definition of Done）
 
-- [ ] `node test-client.mjs`、`node test-cli.mjs`、`node test-menu.mjs` 全绿
+- [ ] 四套测试全绿：`test-client` / `test-cli` / `test-menu` / `test-runner`
 - [ ] `npm pack --dry-run` 只列出源码（`bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`），不含 `docs/` 与测试文件
 - [ ] `gitbash-mcp init --dry-run` 能正确预览各客户端配置
 - [ ] 缺 bash 时服务仍能启动并给出 `BASH_NOT_FOUND` + 修复指引

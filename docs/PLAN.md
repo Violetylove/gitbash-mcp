@@ -11,7 +11,9 @@
 | M4 | 真机验证 | DSH 面板注册，工具实际可用 | 完成 |
 | M5 | 友好性 | 惰性检测 + `BASH_NOT_FOUND` + `doctor` | 完成 |
 | M6 | npm 就绪 | bin / files / engines / license | 完成 |
-| M7 | 交互式安装器 | `gitbash-mcp init/uninstall/doctor` + 多客户端菜单；`npm pack` = 8 文件 12.3KB | 完成 |
+| M7 | 交互式安装器 | `gitbash-mcp init/uninstall/doctor` + clack 风格勾选菜单 | 完成 |
+| M8 | git + 首发准备 | git 初始化、publishConfig、`docs/NPM_PUBLISH.md` | 完成 |
+| M9 | **P0 护栏** | 取消即杀 / 并发上限 / 双重封顶 / 环境洗白 / 审计日志（零配置） | 完成 |
 
 ## 待办
 
@@ -29,6 +31,11 @@
 | 兜底 | 打印 JSON/TOML 片段供手动粘贴 |
 
 预估 2–3 小时。验收：写入幂等、失败可回滚（备份）、无 agent 时给出手动片段。
+
+### M10：P1 策略引擎（下一步）
+
+三档规则（catastrophic / dangerous / suspicious）× 一个姿态 `GITBASH_MCP_RISKY`（默认 `ask`：拦住并让用户决定；
+`allow`：放行 + 审计）。新增 `policy` 工具报告生效策略。**不做** in-band 批准码——模型拥有同一个 shell，那是自批准。
 
 ### M8：发布到 npm
 

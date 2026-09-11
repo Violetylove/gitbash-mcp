@@ -1,6 +1,6 @@
 {
   "name": "gitbash-mcp",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "MCP server that exposes git-bash (MSYS2) command execution to AI agents such as DSH, Claude Code and Codex.",
   "type": "module",
   "main": "server.js",
@@ -30,7 +30,7 @@
   ],
   "scripts": {
     "start": "node bin/gitbash-mcp.js",
-    "test": "node test-client.mjs && node test-cli.mjs && node test-menu.mjs"
+    "test": "node test-client.mjs && node test-cli.mjs && node test-menu.mjs && node test-runner.mjs"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

@@ -26,7 +26,11 @@ function assert(cond, label, detail) {
   if (cond) console.log('  ok  ' + label)
   else { failures++; console.log('FAIL  ' + label + (detail !== undefined ? ' - ' + String(detail).slice(0, 300) : '')) }
 }
-const run = (args) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', cwd: work })
+const run = (args, extraEnv) => spawnSync(process.execPath, [bin, ...args], {
+  encoding: 'utf8',
+  cwd: work,
+  env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+})
 const read = (p) => readFileSync(p, 'utf8')
 
 const claudeFile = join(home, '.claude.json')
@@ -35,7 +39,8 @@ const dshFile = join(dshHome, 'cordis.patch.yml')
 
 console.log('== help / version / doctor ==')
 assert(run(['--help']).stdout.includes('gitbash-mcp init'), 'help lists init')
-assert(run(['--version']).stdout.includes('2.2.0'), 'version prints 2.2.0')
+const pkgVersion = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8')).version
+assert(run(['--version']).stdout.includes(pkgVersion), 'version prints the package version', pkgVersion)
 const doc = run(['doctor'])
 assert(doc.stdout.includes('candidate scan'), 'doctor prints the candidate scan')
 
@@ -80,6 +85,11 @@ console.log('== --yes picks detected clients ==')
 const yes = run(['init', '--yes', '--root', work])
 assert(yes.status === 0, 'init --yes exits 0', yes.stderr)
 assert(read(claudeFile).includes('gitbash'), 'init --yes configured detected claude-code')
+
+console.log('== audit command ==')
+const aud = run(['audit'], { LOCALAPPDATA: work, XDG_STATE_HOME: work })
+assert(aud.stdout.includes('gitbash-mcp audit'), 'audit prints its header', aud.stdout)
+assert(aud.stdout.includes('no entries yet'), 'audit reports an empty log', aud.stdout)
 
 console.log('== --runtime name writes the bare command ==')
 run(['uninstall', '--target', 'claude-code', '--root', work])
