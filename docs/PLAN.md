@@ -1,71 +1,50 @@
 # gitbash-mcp 项目计划书
 
+> 状态：M0–M10 完成；只剩发布（阻塞在账号 2FA）。代码契约以 `docs/DESIGN.md` 为准。
+
 ## 已完成
 
-| # | 里程碑 | 交付 | 状态 |
-|---|---|---|---|
-| M0 | 设计定稿 | DESIGN / PLAN / AGENTS | 完成 |
-| M1 | 骨架 + 核心 exec | server.js + 冒烟测试 | 完成 |
-| M2 | 健壮性 | 超时整树杀 / 截断+spill / UTF-8 / 错误契约 | 完成 |
-| M3 | 部署脚本 | install/uninstall（后因改用其他注册方式而废弃） | 完成 |
-| M4 | 真机验证 | DSH 面板注册，工具实际可用 | 完成 |
-| M5 | 友好性 | 惰性检测 + `BASH_NOT_FOUND` + `doctor` | 完成 |
-| M6 | npm 就绪 | bin / files / engines / license | 完成 |
-| M7 | 交互式安装器 | `gitbash-mcp init/uninstall/doctor` + clack 风格勾选菜单 | 完成 |
-| M8 | git + 首发准备 | git 初始化、publishConfig、`docs/NPM_PUBLISH.md` | 完成 |
-| M9 | **P0 护栏** | 取消即杀 / 并发上限 / 双重封顶 / 环境洗白 / 审计日志（零配置） | 完成 |
+| # | 里程碑 | 交付 |
+|---|---|---|
+| M0 | 设计定稿 | DESIGN / PLAN / AGENTS |
+| M1 | 骨架 + 核心 exec | server.js + 协议冒烟 |
+| M2 | 健壮性 | 超时整树杀 / 截断+spill / UTF-8 / 错误契约 |
+| M3 | 部署脚本 | install/uninstall（后被 CLI 取代并删除） |
+| M4 | 真机验证 | DSH 面板注册，工具实际可用 |
+| M5 | 友好性 | 惰性检测 + `BASH_NOT_FOUND` + `doctor`（启动永不失败） |
+| M6 | npm 就绪 | bin / files / engines / license / publishConfig |
+| M7 | 交互式安装器 | `init` / `uninstall` / `doctor` + 备用屏幕勾选菜单（6 客户端） |
+| M8 | git + 首发准备 | git 初始化、`docs/NPM_PUBLISH.md` |
+| M9 | P0 护栏 | 取消即杀 / 并发上限 / 双重封顶 / 环境洗白 / 审计日志（零配置） |
+| M10 | P1 策略引擎 | 三档规则（`rm` 走结构化解析）+ 单开关 `GITBASH_MCP_RISKY` + `policy` 工具 |
 
-## 待办
+## 未完成
 
-### M7：交互式安装器（`gitbash-mcp init`）
+### M11：发布到 npm（阻塞：账号 2FA）
 
-纯 JS、零新增依赖（`node:readline`）。流程：探测已安装的 agent → 多选菜单 → 预览 diff → 备份后写入 → 提示重启。
+1. `npm publish` —— `publishConfig` 已指向官方源；需要一次 OTP，或把 granular token 配成
+   **All packages + Read and write + Bypass 2FA**
+2. `npm i -g gitbash-mcp` 验证全局安装
+3. 把 DSH 面板的注册从仓库路径改成 `gitbash-mcp` 命令
 
-| 客户端 | 写入位置 |
-|---|---|
-| DSH | `$DSH_HOME/cordis.patch.yml`，或提示用面板 |
-| Claude Code | `~/.claude.json` 的 `mcpServers` |
-| Codex CLI | `~/.codex/config.toml` 的 `[mcp_servers.gitbash]` |
-| Claude Desktop | `%APPDATA%/Claude/claude_desktop_config.json` |
-| Cursor / VS Code | `~/.cursor/mcp.json` / `.vscode/mcp.json` |
-| 兜底 | 打印 JSON/TOML 片段供手动粘贴 |
+### M12（可选）：P2 加固
 
-预估 2–3 小时。验收：写入幂等、失败可回滚（备份）、无 agent 时给出手动片段。
-
-### M10：P1 策略引擎（完成）
-
-三档规则（rm 走结构化解析）+ 单开关 `GITBASH_MCP_RISKY`（默认 `ask`）+ `policy` 工具 + `test-policy.mjs`（32 用例）。
-**不做** in-band 批准码——模型拥有同一个 shell，那是自批准。
-
-### M11：发布到 npm（等待 2FA）
-
-三档规则（catastrophic / dangerous / suspicious）× 一个姿态 `GITBASH_MCP_RISKY`（默认 `ask`：拦住并让用户决定；
-`allow`：放行 + 审计）。新增 `policy` 工具报告生效策略。**不做** in-band 批准码——模型拥有同一个 shell，那是自批准。
-
-### M8：发布到 npm
-
-1. `npm login`（用户操作）
-2. `npm version minor`（含 M7 后发布 2.2.0）
-3. `npm publish`
-4. `npm i -g gitbash-mcp` 验证
-5. 把 DSH 面板从旧 exe 路径改为 `gitbash-mcp`；验证通过后删除残留 exe
-
-### M9：文档终审
-
-对齐 README / DESIGN / PLAN / AGENTS / NPM_PUBLISH；初始化 git 仓库并首次提交。
+- `GITBASH_MCP_ENV=safe` 白名单模式（当前是内置换白，够用）
+- `bash -r` 受限模式（软限制，会破正常用法，默认关）
+- `readonly` 策略预设
 
 ## 风险登记表
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 找不到 bash | 工具不可用 | 服务不崩；`BASH_NOT_FOUND` + `doctor` 给修复步骤 |
-| MSYS2 子进程残留 | 超时后占资源 | `taskkill /T /F` 整树 |
-| 输出编码 | 中文乱码 | UTF-8 解码；实测中文正常 |
-| npm 包名被占用 | 无法发布 | 已核实未占用；若被占改用 scope + `--access public` |
-| 旧 exe 残留 | 面板指向失效路径 | 切换注册后再删（当前被运行中的进程锁定） |
-| 依赖漂移（SDK/zod） | 启动报错 | semver 锁定 + 发布前跑冒烟 |
+| MSYS2 子进程残留 | 超时后占资源 | `taskkill /T /F` 整树 + 1.5s 有界宽限结算 |
+| 策略被绕过 | 危险命令仍可能执行 | 文档明确声明「护栏不是安全边界」；人类同意开关 + 完整审计 |
+| 审计 / spill 无界增长 | 磁盘占用 | 审计 5MB 轮转；spill 单文件 64MB + 24h 清理 |
+| 依赖漂移（SDK/zod） | 启动报错 | semver 锁定 + 每次发布前跑五套测试 |
 
 ## 变更控制
 
-- 验收未过不进下一步；文档与代码同一提交。
-- 结果契约（DESIGN §4）与启动永不失败（§5.1）是红线。
+- 五套测试全绿才提交；文档与代码同一提交。
+- 结果契约（DESIGN §4）与「启动永不失败」（§5.1）是红线。
+- 唯一允许的环境变量是 `GITBASH_MCP_RISKY`。

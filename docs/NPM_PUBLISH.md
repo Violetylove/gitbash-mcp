@@ -44,9 +44,9 @@ npm whoami         # 应该打印你的用户名
 ## 3. 定版本号
 
 ~~~powershell
-npm version patch   # 2.1.0 -> 2.1.1（修 bug）
-npm version minor   # 2.1.0 -> 2.2.0（加功能）
-npm version major   # 2.1.0 -> 3.0.0（破坏性变更）
+npm version patch   # 2.3.0 -> 2.3.1（修 bug）
+npm version minor   # 2.3.0 -> 2.4.0（加功能）
+npm version major   # 2.3.0 -> 3.0.0（破坏性变更）
 ~~~
 
 这条命令会改 `package.json` 并自动打一个 git tag（若仓库已初始化）。
@@ -57,7 +57,7 @@ npm version major   # 2.1.0 -> 3.0.0（破坏性变更）
 npm publish
 ~~~
 
-看到 `+ gitbash-mcp@2.1.0` 即成功。
+看到 `+ gitbash-mcp@2.3.0` 即成功。
 
 ## 5. 验证
 
@@ -91,8 +91,8 @@ npm i -g .        # 把当前目录作为包全局安装
 
 | 目的 | 命令 | 限制 |
 |---|---|---|
-| 72 小时内撤回 | `npm unpublish gitbash-mcp@2.1.0` | 发布超过 72 小时、或已被依赖则不允许 |
-| 标记弃用 | `npm deprecate gitbash-mcp@2.1.0 "reason"` | 推荐，温和且可逆 |
+| 72 小时内撤回 | `npm unpublish gitbash-mcp@2.3.0` | 发布超过 72 小时、或已被依赖则不允许 |
+| 标记弃用 | `npm deprecate gitbash-mcp@2.3.0 "reason"` | 推荐，温和且可逆 |
 | 整包撤回 | `npm unpublish gitbash-mcp --force` | 有严格限制，慎用 |
 
 ## 8.5 本机特有问题（已遇到）

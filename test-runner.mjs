@@ -1,9 +1,9 @@
 // P0 guardrail tests: env scrubbing, capped spill, bounded concurrency,
 // cancellation kills the tree, and the audit log. Run: node test-runner.mjs
 import { Readable } from 'node:stream'
-import { mkdtempSync, rmSync, existsSync, statSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, statSync, readFileSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { scrubEnv, collectStream, createSemaphore, spawnBash } from './lib/runner.js'
 import { appendAudit, readAudit, auditPath } from './lib/audit.js'
 import { detectBash } from './lib/detect.js'
@@ -25,6 +25,18 @@ assert(scrubbed.PATH === 'C:/x' && scrubbed.GITBASH_BASH === 'b.exe' && scrubbed
 assert(scrubbed.MY_TOKEN === undefined && scrubbed.DEEPSEEK_API_KEY === undefined, 'drops token-shaped and API keys')
 assert(scrubbed.AWS_SECRET_ACCESS_KEY === undefined && scrubbed.DB_PASSWORD === undefined, 'drops cloud secret and password')
 assert(scrubbed.SSH_AUTH_SOCK === '/tmp/s', 'keeps SSH_AUTH_SOCK (ssh-agent must still work)')
+
+console.log('== stale spill files are swept ==')
+const spillDir = join(tmpdir(), 'gitbash-mcp')
+mkdirSync(spillDir, { recursive: true })
+const stale = join(spillDir, 'stale-probe.log')
+writeFileSync(stale, 'old')
+const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000)
+utimesSync(stale, longAgo, longAgo)
+const swept = await collectStream(canned([Buffer.alloc(4096, 65)]), { memoryCapBytes: 64, spillCapBytes: 4096 })
+assert(existsSync(swept.spillPath), 'this run created its own spill file')
+assert(!existsSync(stale), 'the 48h-old spill file was swept')
+if (swept.spillPath) rmSync(swept.spillPath, { force: true })
 
 console.log('== spill is capped ==')
 const big = await collectStream(canned([Buffer.alloc(4096, 65), Buffer.alloc(4096, 66)]), { memoryCapBytes: 1024, spillCapBytes: 2048 })
@@ -81,6 +93,18 @@ assert(rows.length === 1 && rows[0].id === 'test-1', 'readAudit returns the reco
 const raw = readFileSync(auditPath(), 'utf8')
 assert(raw.trim().split(String.fromCharCode(10)).length === 1 && raw.endsWith(String.fromCharCode(10)), 'one JSONL line per record')
 rmSync(auditDir, { recursive: true, force: true })
+
+console.log('== audit rotation ==')
+const rotDir = mkdtempSync(join(tmpdir(), 'gbm-rot-'))
+process.env.LOCALAPPDATA = rotDir
+const rotTarget = auditPath()
+mkdirSync(dirname(rotTarget), { recursive: true })
+writeFileSync(rotTarget, 'x'.repeat(5 * 1024 * 1024 + 32))
+appendAudit({ id: 'after-rotate' })
+assert(existsSync(rotTarget.slice(0, -'.jsonl'.length) + '.1.jsonl'), 'the oversized log rotated to .1.jsonl')
+const rotated = readAudit(5)
+assert(rotated.length === 1 && rotated[0].id === 'after-rotate', 'a fresh log starts after rotation', JSON.stringify(rotated))
+rmSync(rotDir, { recursive: true, force: true })
 
 console.log(failures === 0 ? String.fromCharCode(10) + 'RUNNER ALL PASS' : String.fromCharCode(10) + failures + ' RUNNER FAILURES')
 process.exit(failures === 0 ? 0 : 1)

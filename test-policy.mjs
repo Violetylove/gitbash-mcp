@@ -41,6 +41,13 @@ const CASES = [
   ['rm -f file.txt', 'safe'],
   ['grep -rn TODO src | head -20', 'safe'],
   ['for i in $(seq 1 100); do echo $i; done', 'safe'],
+  // regression: a newline used to hide the rm check entirely (^ had no /m flag)
+  ['cd /tmp\nrm -rf /', 'catastrophic'],
+  ['echo hi\nrm -rf ./build', 'dangerous'],
+  ['echo hi\nsudo rm -rf /tmp/x', 'dangerous'],
+  ['rm -rf "$HOME"', 'catastrophic'],
+  ['rm -rf ${HOME}', 'catastrophic'],
+  ['rm -rf $HOME/tmp', 'dangerous'],
 ]
 
 console.log('== tier classification (' + CASES.length + ' cases) ==')
