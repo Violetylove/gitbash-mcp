@@ -180,4 +180,4 @@ npm i -g .                     # 从本地仓库全局安装（发布前自测�
 
 - `docs/DESIGN.md` — 架构、契约、设计决策
 - `docs/PLAN.md` — 里程碑与风险
-- `docs/NPM_PUBLISH.md` — 发布到 npm 的完整步骤
+- `docs/NPM_PUBLISH.md` — 发布到 npm 的完整步骤（**本地文件，不入库**）

@@ -182,7 +182,7 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 
 发布：`npm pack --dry-run` 只应包含源码 —— `bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`
 （当前 12 个文件、打包约 24KB），不含 `docs/` 与测试文件；
-完整步骤见 `docs/NPM_PUBLISH.md`。
+完整步骤见 `docs/NPM_PUBLISH.md`（本地文件，不入库）。
 
 配置：`gitbash-mcp init` 交互式写入各客户端配置（见 §4.4）；也可手动把命令写成 `gitbash-mcp`、参数留空。
 DSH 也可用面板插件注册。

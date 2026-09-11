@@ -29,7 +29,7 @@ agent-git-bash/
 └── docs/
     ├── DESIGN.md
     ├── PLAN.md
-    └── NPM_PUBLISH.md
+    └── NPM_PUBLISH.md      ← 本地文件，不入库（gitignore）
 ~~~
 
 ## 常用命令
