@@ -33,9 +33,13 @@ MCP 客户端（DSH / Claude Code / Codex）
 
 代码结构：`bin/gitbash-mcp.js` 是唯一入口（无参 → 起 MCP server；`init`/`uninstall`/`doctor` → CLI）；
 `server.js` 只做工具注册，`lib/detect.js`（bash 检测 / doctor）与 `lib/runner.js`（spawn / 截断）被两者共用，
-`lib/cli.js` 是零依赖（`node:readline`）的客户端配置写入器。
+`lib/cli.js` 是零依赖（`node:readline`）的客户端配置写入器。逐文件职责与「任务→改哪里」见 `docs/REPO_MAP.md`。
 
 ## 4. 工具契约
+
+除下面四个工具外，服务端还在 MCP `initialize` 的 `instructions` 字段里声明「本服务是沙箱外的 git-bash；
+Windows 上优先用 `exec`，把原生 PowerShell 留给 Windows 专有能力」——支持的客户端会把它注入模型上下文，
+这是最通用的采纳手段（`exec` 的描述里也重复了一句，覆盖不读 `instructions` 的客户端）。
 
 ### 4.1 `exec`
 
@@ -86,7 +90,11 @@ MCP 客户端（DSH / Claude Code / Codex）
 纯文本诊断：platform、runtime、execPath、`GITBASH_BASH` 值及有效性、命中的 bash 及来源、
 PATH 上的 git、**逐条候选路径命中情况**、缺 bash 时的修复步骤。
 
-### 4.4 CLI（`init` / `uninstall` / `doctor`）
+### 4.4 `policy`
+纯文本打印当前姿态（`GITBASH_MCP_RISKY`）与完整规则清单。被 `APPROVAL_REQUIRED` / `POLICY_DENIED`
+拦住后，模型调它才能准确向用户解释「拦了什么、为什么、三条出路」。
+
+### 4.5 CLI（`init` / `uninstall` / `doctor`）
 
 `gitbash-mcp init` 探测本机已安装的客户端并交互式写入 MCP 配置：
 
@@ -183,7 +191,7 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 新增 `policy` 工具输出完整规则与当前姿态，供模型向用户解释。
 
 ### 5.9 分发：全局安装，不做 exe
-`bin: { gitbash-mcp: server.js }`，shebang `#!/usr/bin/env node`，用户 `npm i -g gitbash-mcp`。
+`bin: { gitbash-mcp: bin/gitbash-mcp.js }`，shebang `#!/usr/bin/env node`，用户 `npm i -g gitbash-mcp`。
 `bun build --compile` 会内嵌整个 Bun 运行时（实测 108.82MB），全局安装只需用户已有的 Node，
 安装体积约 14MB（依赖 13.85MB）。
 
@@ -193,10 +201,9 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 ## 6. 分发与配置
 
 发布：`npm pack --dry-run` 只应包含源码 —— `bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`
-（当前 13 个文件、打包约 29KB），不含 `docs/` 与测试文件；
-完整步骤见 `docs/NPM_PUBLISH.md`（本地文件，不入库）。
+（当前 13 个文件、打包约 30KB），不含 `docs/` 与测试文件。
 
-配置：`gitbash-mcp init` 交互式写入各客户端配置（见 §4.4）；也可手动把命令写成 `gitbash-mcp`、参数留空。
+配置：`gitbash-mcp init` 交互式写入各客户端配置（见 §4.5）；也可手动把命令写成 `gitbash-mcp`、参数留空。
 DSH 也可用面板插件注册。
 
 ## 7. 被否方案（留档）
@@ -222,7 +229,7 @@ DSH 也可用面板插件注册。
 `node test/test-runner.mjs` 单测 P0 护栏：环境洗白的保留/剔除清单、spill 内存与磁盘双重封顶、
 信号量并发峰值与 `queuedMs`、**取消后进程树确实死亡**（用延迟写入的标记文件验证）、审计 JSONL 往返。
 
-`node test/test-policy.mjs` 覆盖策略：32 个档位分类用例（含曾经误判的 `rm -rf ./x`）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
+`node test/test-policy.mjs` 覆盖策略：43 个档位分类用例（含曾经误判的 `rm -rf ./x`）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
 
 > 五套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
 > 审计写入用临时 `LOCALAPPDATA`，不会污染真实日志。

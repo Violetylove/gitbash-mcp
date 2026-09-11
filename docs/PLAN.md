@@ -1,6 +1,6 @@
 # gitbash-mcp 项目计划书
 
-> 状态：M0–M10 完成（M10 已从三档正则升级为**能力分类 / 模型 D**）；只剩发布（阻塞在账号 2FA）。代码契约以 `docs/DESIGN.md` 为准。
+> 状态：M0–M11 完成（M11 = 采纳率：服务端 `instructions` + `exec` 描述声明「Windows 优先」）；只剩发布。代码契约以 `docs/DESIGN.md` 为准，代码地图见 `docs/REPO_MAP.md`。
 
 ## 已完成
 
@@ -14,20 +14,22 @@
 | M5 | 友好性 | 惰性检测 + `BASH_NOT_FOUND` + `doctor`（启动永不失败） |
 | M6 | npm 就绪 | bin / files / engines / license / publishConfig |
 | M7 | 交互式安装器 | `init` / `uninstall` / `doctor` + 备用屏幕勾选菜单（6 客户端） |
-| M8 | git + 首发准备 | git 初始化、`docs/NPM_PUBLISH.md` |
+| M8 | git + 首发准备 | git 初始化、发布前自检（`npm pack --dry-run`） |
 | M9 | P0 护栏 | 取消即杀 / 并发上限 / 双重封顶 / 环境洗白 / 审计日志（零配置） |
 | M10 | P1 策略引擎 | 能力分类（`shell-parse.js` 解析 + 逐段判定 + 项目声明信任，取代正则黑名单）+ 单开关 `GITBASH_MCP_RISKY` + `policy` 工具 |
+| M11 | 采纳率 | 服务端 MCP `instructions` + `exec` 描述声明「Windows 上优先用它」（`4d4b62d`） |
 
 ## 未完成
 
-### M11：发布到 npm（阻塞：账号 2FA）
+### M12：发布到 npm（只剩真发布的 OTP）
 
-1. `npm publish` —— `publishConfig` 已指向官方源；需要一次 OTP，或把 granular token 配成
-   **All packages + Read and write + Bypass 2FA**
-2. `npm i -g gitbash-mcp` 验证全局安装
-3. 把 DSH 面板的注册从仓库路径改成 `gitbash-mcp` 命令
+1. 前置已就绪：包名 404 未被占用；`npm whoami --registry=https://registry.npmjs.org/` → `violetylov3`；
+   `npm publish --dry-run` 已跑通（13 个文件、约 29 kB）
+2. `npm publish --otp=<验证器 6 位码>`（或把 granular token 配成 **All packages + Read and write + Bypass 2FA**）
+3. `npm i -g gitbash-mcp` 验证全局安装
+4. 把 DSH 面板的注册从仓库路径改成 `gitbash-mcp` 命令
 
-### M12（可选）：P2 加固
+### M13（可选）：P2 加固
 
 - ~~`GITBASH_MCP_ENV=safe` 白名单模式~~ 已由模型 D 的「项目声明信任」取代：不引入需要人维护的清单文件
 - `bash -r` 受限模式（软限制，会破正常用法，默认关）
@@ -45,6 +47,6 @@
 
 ## 变更控制
 
-- 五套测试全绿才提交；文档与代码同一提交。
+- 五套测试全绿才提交；文档（README / AGENTS / DESIGN / PLAN / REPO_MAP）与代码同一提交。
 - 结果契约（DESIGN §4）与「启动永不失败」（§5.1）是红线。
 - 唯一允许的环境变量是 `GITBASH_MCP_RISKY`。

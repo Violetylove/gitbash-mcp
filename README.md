@@ -1,19 +1,17 @@
 # gitbash-mcp
 
-MCP server，把 **git-bash (MSYS2)** 的命令执行能力提供给 AI agent（DSH / Claude Code / Codex / ...）。
-它在 agent 的沙箱**之外**运行，因此 bash 的管道、信号管道全部可用。
+MCP server，把 **git-bash (MSYS2)** 交给 AI agent 用（DSH / Claude Code / Codex / Cursor / VS Code / Claude Desktop）。
+它在 agent 的沙箱**之外**运行，所以管道、`$(...)`、子进程全部可用。
 
-- 工具：`exec`、`bash_info`、`doctor`
+- 工具：`exec`、`bash_info`、`doctor`、`policy`
 - 运行时：Node >= 18（兼容 Bun）
 - 协议：MCP stdio
 
 ## 为什么需要它
 
-DSH 的 Windows 沙箱用 WRITE_RESTRICTED 受限令牌执行命令。MSYS2 启动时必须创建 signal pipe，
-受限令牌下会失败（实测 `couldn't create signal pipe, Win32 error 5`，进程直接崩溃）；
-受限令牌下新建命名管道同样会 EPERM（Node `spawn` 默认 `stdio: 'pipe'` 即 `Error: spawn EPERM`）。
-
-**结论：沙箱内跑 git-bash 无解。** 本服务器以独立进程活在沙箱外，绕开该限制。
+Windows 上 DSH 的沙箱用 WRITE_RESTRICTED 受限令牌跑命令。MSYS2 启动要建 signal pipe，受限令牌下直接失败
+（实测 `couldn't create signal pipe, Win32 error 5`）；捕获子进程输出也会 `EPERM`。
+**沙箱内跑 git-bash 无解**，所以这个 MCP 以独立进程活在沙箱外。
 
 ## 安装
 
@@ -25,38 +23,33 @@ npm i -g gitbash-mcp
 bun add -g gitbash-mcp
 ~~~
 
-> 不支持 `npx` / `bunx`：每次拉起都要经过 npx 包装层，在 Windows 上以 stdio 启动不稳定。
+不支持 npx / bunx：多一层包装，在 Windows 上以 stdio 启动不稳定。
 
-## 配置
+## 部署到 MCP 客户端
 
-### 一键配置（推荐）
+**用 `init`**（推荐），它会把「绝对 runtime + 脚本路径」写进客户端配置：
 
 ~~~powershell
-gitbash-mcp init           # 交互式勾选菜单
-gitbash-mcp init --yes     # 免交互，配置所有检测到的客户端
-gitbash-mcp init --no-tui  # 纯文本编号输入（非 TTY 环境会自动切换）
-gitbash-mcp uninstall      # 反向移除
-gitbash-mcp audit          # 查看最近的命令审计日志
-gitbash-mcp policy         # 查看当前命令策略
+gitbash-mcp init          # 交互式勾选
+gitbash-mcp init --yes    # 免交互，配置所有已检测到的客户端
+gitbash-mcp init --dry-run
+gitbash-mcp uninstall     # 反向移除，只删自己的条目
 ~~~
 
-菜单操作：`↑/↓`（或 `k/j`）移动光标，`空格` 勾选/取消，`a` 全选，`n` 全不选，`1-9` 跳到并切换该项，`回车` 确认，`q`/`Esc`/`Ctrl-C` 取消。
+| 客户端 | 写入位置 | 格式 |
+|---|---|---|
+| DSH | `$DSH_HOME/cordis.patch.yml` | YAML insert |
+| Claude Code | `~/.claude.json` | `mcpServers` |
+| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.gitbash]` |
+| Claude Desktop | `%APPDATA%/Claude/claude_desktop_config.json` | `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | `mcpServers` |
+| VS Code | `<cwd>/.vscode/mcp.json` | `servers` |
 
-条目分两类：**已探测到**（排在前面、默认勾选，并标注探测依据，如 `(detected: command codex)` 或 `(detected: .dsh)`）与 **未探测到**（标注 `(not found)`，仍可勾选，便于预配置）。
-探测为实时判断，顺序是：**PATH 上是否有对应可执行文件**（`claude`、`codex`、`cursor`、`code`）→ 配置目录 → 配置文件；依据直接显示在菜单里，不用猜。
-
-支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code；写入前自动备份为 `*.bak`。
-
-### 手动配置
-
-把 MCP 命令写成全局命令名 `gitbash-mcp`：
-
-| 客户端 | 做法 |
-|---|---|
-| DSH | 面板新增 MCP：名称 `gitbash`，命令 `gitbash-mcp`，参数留空 |
-| Claude Code | `claude mcp add gitbash -- gitbash-mcp` |
-| Codex CLI | `~/.codex/config.toml` 加 `[mcp_servers.gitbash]`，`command = "gitbash-mcp"` |
-| 通用 JSON | `{ "mcpServers": { "gitbash": { "command": "gitbash-mcp", "args": [] } } }` |
+- 默认写**绝对路径**（`node <...>/bin/gitbash-mcp.js`）。npm / bun 的全局 shim 目录常常不在 GUI 客户端的
+  PATH 上，写裸命令 `gitbash-mcp` 会启不起来；只有你确认 shim 在 PATH 上时才用 `--runtime name`。
+- 写入前备份 `*.bak`，重复运行幂等；`--target a,b` 精确指定，`--no-tui` 走编号输入。
+- 探测依据直接显示在菜单里（PATH 可执行文件 → 配置目录 → 配置文件）。
+- **配置完重启对应的客户端。**
 
 ## 工具
 
@@ -70,122 +63,74 @@ gitbash-mcp policy         # 查看当前命令策略
 | `login` | | `bash -lc`（读 profile） |
 | `env` | | 追加环境变量 |
 
-返回统一 JSON：
+返回统一 JSON：`exit_code` `stdout` `stderr` `timed_out` `truncated` `spill_path` `duration_ms` `killed_by`
+`queued_ms` `audit_id`，以及裁决信息 `policy`。**命令失败（非零退出 / 超时 / spawn 失败）也返回这个结构，不抛工具错误。**
+完整契约见 `docs/DESIGN.md` §4。
 
-~~~jsonc
-{
-  // 命令失败（非零退出 / 超时 / spawn 失败）也返回这个结构，不抛工具错误
-  "exit_code": 0,
-  "stdout": "...",
-  "stderr": "",
-  "timed_out": false,
-  "truncated": false,
-  "spill_path": null
-}
-~~~
-
-- 输出超过 64KB 时截断，完整内容转存到 `%TEMP%\gitbash-mcp\`，`spill_path` 指向它
+- 输出超 64KB 截断，完整内容转存 `%TEMP%\gitbash-mcp\`，`spill_path` 指向它
 - 每次调用都是新进程，状态不保留（用 `cd` 或传 `cwd`）
 
-### `bash_info`
+### 其他
 
-报告解析到的 bash 路径与 bash/git 版本。
+- `bash_info` — 报 bash 路径与 bash/git 版本
+- `doctor` — 完整环境诊断，**bash 异常先调它**
+- `policy` — 打印当前姿态与完整规则；被拦住后调它才能向用户解释清楚
 
-### `doctor`
+`exec` 的描述和 MCP `initialize` 的 `instructions` 都声明了「Windows 上优先用它」，但压不过 harness 自带的
+系统提示——模型仍可能先选自带 shell。
 
-完整环境诊断：所有探测过的候选路径、命中的那个、`GITBASH_BASH` 的值是否有效、git 是否在 PATH、
-以及找不到时的修复步骤。**bash 相关异常先调它。**
+## 命令策略
 
-## 护栏（P0，零配置）
+不是黑名单，是**能力分类**：命令被切成若干段逐段判定，只有每段都可读、或由项目自己声明、且没有不可判读构造时才自动放行。
+唯一开关 `GITBASH_MCP_RISKY` 写在 MCP 客户端配置里（模型改不了，改完要重启服务器）。
 
-装好即生效，不需要任何开关：
+| 判定 | 默认 `ask` | `allow` |
+|---|---|---|
+| read-only / project | 放行 | 放行 |
+| mutating / unknown / opaque | 拦住，让你决定（`APPROVAL_REQUIRED`） | 放行 + 审计 |
+| catastrophic | 拒绝（`POLICY_DENIED`） | 放行 + 审计 |
 
-| 机制 | 行为 |
-|---|---|
-| **取消即杀** | 工具调用被取消时，整棵进程树被 `taskkill /T /F` 杀掉，结果标记 `killed_by: cancel` |
-| **并发上限** | 最多 4 条命令同时运行，其余排队并在结果里报 `queued_ms` |
-| **输出上限** | 单流内存 64KB；超出部分写入 spill 文件，该文件本身也**封顶 64MB** |
-| **环境洗白** | 交给 bash 之前清掉凭据形状的变量（`*_TOKEN`、`*_API_KEY`、`AWS_*`、`*PASSWORD*` 等），`SSH_AUTH_SOCK` 保留 |
-| **审计日志** | 每次调用追加一行 JSONL；`gitbash-mcp audit [-n 20]` 查看 |
+被拦住时模型会拿到三条路：① 你自己在终端跑 ② 换更安全的写法 ③ 改配置加 `GITBASH_MCP_RISKY=allow` 并重启。
+查看当前策略：`gitbash-mcp policy`。为什么不用正则黑名单、为什么没有批准码，见 `docs/DESIGN.md` §5.8。
 
-`exec` 的结果因此多了这些字段：`duration_ms`、`killed_by`（cancel / timeout / null）、`queued_ms`、
-`spill_bytes`、`spill_truncated`、`audit_id`。
+## 护栏（零配置）
 
-> **诚实声明**：这些是『降低误伤与明显滥用』的护栏，**不是安全边界**——它挡不住蓄意绕过（`r''m`、`$IFS`、
-> `base64 -d|bash` 等）。真正的隔离只能在 OS 层做（低权限账户 / 容器 / VM）。
+- **取消即杀**：整棵进程树 `taskkill /T /F`，结果标 `killed_by: cancel`
+- **并发上限 4**：超出排队，并在结果里报 `queued_ms`
+- **输出封顶**：内存单流 64KB，spill 文件另有 64MB 上限
+- **环境洗白**：清掉凭据形状变量（`*_TOKEN` / `*_API_KEY` / `AWS_*` / `*PASSWORD*`），保留 `SSH_AUTH_SOCK`
+- **审计**：每次调用一行 JSONL，`gitbash-mcp audit` 查看
 
-## 命令策略（P1，一个开关，能力分类而非黑名单）
-
-不是"危险命令黑名单"，而是**能力分类**：先把命令解析成若干简单命令（去引号、切管道、跳过 here-doc 正文），
-再逐段判定能力；只有当**每一段都可读或由项目自己声明**、且没有不可判读的构造时才自动放行。
-只由**一个**环境变量控制（写在 MCP 客户端配置里，模型改不了；改完要重启服务器）：
-
-| 判定 | 例子 | `GITBASH_MCP_RISKY=ask`（默认） | `=allow` |
-|---|---|---|---|
-| read-only | `ls`、`cat`、`grep`、`jq`、`git status`/`log`/`diff` | 放行 | 放行 |
-| project | 项目自己声明的入口：package.json scripts、Makefile 目标、justfile recipe、`cargo test` 等 | 放行 | 放行 |
-| mutating / unknown | `rm -rf ./x`、`npm install`、`git push --force`、`curl \| bash`、`npm publish` | **拦住，让你决定**（`APPROVAL_REQUIRED`） | 放行 + 审计 |
-| opaque | `eval`、`bash -c`、`$(...)`、`$'…'`、变量当程序名、`(...)` 子 shell | 同上（证明不了安全就不猜） | 放行 + 审计 |
-| catastrophic | `mkfs`、`diskpart`、`rm -rf /`、`shutdown`、fork bomb | 拒绝（`POLICY_DENIED`） | 放行 + 审计 |
-
-被拦住时模型会拿到明确指引：① 让你自己在终端跑 ② 换更安全的写法 ③ 你改配置加 `GITBASH_MCP_RISKY=allow` 并重启。
-查看当前策略：`gitbash-mcp policy`，或让模型调 `policy` 工具。
-
-> **为什么不用正则黑名单**：黑名单要为每一种危险写法留一条规则，漏一条就漏一片——实测多行脚本
-> `cd /tmp` 换行 `rm -rf /` 曾被判 safe，而 `echo "git push --force"` 这类纯文本又被误伤。
-> 所以改成「凡不能证明安全就交给人」。
-
-> **为什么没有\"批准码\"**：模型拥有同一个 shell——任何它能提交的批准它也能伪造。唯一不可伪造的同意，是你在**启动配置**里的选择。
-
-## 故障排查
-
-### 报 `BASH_NOT_FOUND`
-
-服务器不会因此崩溃：它照常启动，每次 `exec` 返回带修复指引的 JSON，模型可以直接转述给用户。
-
-~~~jsonc
-{
-  "exit_code": -1,
-  "error_code": "BASH_NOT_FOUND",
-  "stderr": "git-bash (MSYS2 bash) was not found ... 1. Install Git for Windows ...",
-  "hint": "..."
-}
-~~~
-
-修复（二选一，然后重启 MCP 服务器）：
-
-1. 安装 Git for Windows：https://git-scm.com/download/win（自带 git-bash）
-2. 设置环境变量 `GITBASH_BASH` 指向你的 bash.exe，例如 `C:/Program Files/Git/bin/bash.exe`
-
-### bash 检测顺序
-
-`GITBASH_BASH` 环境变量（仅当文件存在）→ PATH 里的 `bash` → 常见安装路径
-（Program Files、Program Files (x86)、`%LOCALAPPDATA%\Programs\Git`、scoop shims、`C:\msys64`、`C:\cygwin64`）。
+> 这些是「降低误伤」的护栏，**不是安全边界**——挡不住 `r''m`、`$IFS`、`base64 -d|bash` 这类蓄意绕过。
+> 真正的隔离只能在 OS 层做（低权限账户 / 容器 / VM）。
 
 ## 安全边界
 
-本进程在沙箱外运行，权限 = 启动它的 agent 进程的**完整用户权限**，没有文件沙箱。
-模型可以无门槛调用 `exec`。这不是缺陷，而是此类 MCP 桥的既有模型——使用前请知悉。
+本进程在沙箱外运行，权限 = 启动它的 agent 进程的**完整用户权限**，没有文件沙箱；模型可以无门槛调用 `exec`。
+这不是缺陷，而是此类 MCP 桥的既有模型——使用前请知悉。
+
+## 故障排查：`BASH_NOT_FOUND`
+
+缺 bash 不会让服务崩：它照常启动，每次 `exec` 返回带修复指引的 JSON。修复二选一，然后重启客户端：
+
+1. 装 Git for Windows（自带 git-bash）：https://git-scm.com/download/win
+2. 设 `GITBASH_BASH` 指向你的 bash.exe，例如 `C:/Program Files/Git/bin/bash.exe`
+
+检测顺序：`GITBASH_BASH`（文件必须存在）→ PATH 上的 `bash` → 常见安装路径
+（Program Files、`%LOCALAPPDATA%\Programs\Git`、scoop shims、`C:\msys64`、`C:\cygwin64`）。
 
 ## 开发
 
 ~~~powershell
-node bin/gitbash-mcp.js        # 起 MCP server（stdio，不接终端）
-node test/test-client.mjs      # 协议冒烟：doctor / 管道 / 超时 / 截断 / 取消 / 策略 / 缺 bash
-node test/test-cli.mjs         # CLI 冒烟：init / uninstall / 幂等 / 备份 / audit
-node test/test-menu.mjs        # 菜单按键逻辑（无需 TTY）
-node test/test-runner.mjs      # 护栏：洗白 / 封顶 / 并发 / 取消杀树 / 审计轮转
-node test/test-policy.mjs      # 策略：档位分类 / 姿态裁决
-npm test                       # 一次跑完五套
-gitbash-mcp init --dry-run     # 预览会写哪些客户端配置
-npm pack --dry-run             # 检查发布内容（只含源码，不含 docs/ 与测试）
-npm i -g .                     # 从本地仓库全局安装（发布前自测）
+node bin/gitbash-mcp.js     # 起 MCP server（stdio，不接终端）
+npm test                    # 五套：client / cli / menu / runner / policy
+npm pack --dry-run          # 检查发布内容（只含源码，不含 docs/ 与测试）
 ~~~
 
-测试会 spawn bash.exe 并使用管道，因此要在**正常 shell**里跑（不要在受限沙箱里跑）。
+测试会 spawn bash.exe 并使用管道，必须在**正常 shell**里跑（不要在受限沙箱里跑）。
 
 ## 文档
 
-- `docs/DESIGN.md` — 架构、契约、设计决策
+- `docs/DESIGN.md` — 架构、工具契约、设计决策
+- `docs/REPO_MAP.md` — 代码地图：文件职责、任务→文件索引
 - `docs/PLAN.md` — 里程碑与风险
-- `docs/NPM_PUBLISH.md` — 发布到 npm 的完整步骤（**本地文件，不入库**）

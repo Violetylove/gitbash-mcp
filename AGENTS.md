@@ -1,16 +1,16 @@
 # AGENTS.md — gitbash-mcp
 
-面向接手本仓库的 agent。先读 `docs/DESIGN.md`，再动手。
+面向接手本仓库的 agent。先读 `docs/REPO_MAP.md`（文件职责 + 任务→文件索引）和 `docs/DESIGN.md`（契约与决策），再动手。
 
 ## 仓库地图
 
 ~~~
-agent-git-bash/
+gitbash-mcp/
 ├── AGENTS.md
 ├── README.md
 ├── LICENSE
 ├── package.json          ← ESM、bin 指向 bin/gitbash-mcp.js、files 白名单
-├── bin/gitbash-mcp.js    ← 入口分发：无参=起 MCP server；init/uninstall/doctor=CLI
+├── bin/gitbash-mcp.js    ← 入口分发：无参=起 MCP server；init/uninstall/doctor/audit/policy=CLI
 ├── server.js             ← MCP server（工具注册）
 ├── lib/
 │   ├── detect.js         ← bash 检测 + doctor 报告（server 与 CLI 共用）
@@ -31,7 +31,7 @@ agent-git-bash/
 └── docs/
     ├── DESIGN.md
     ├── PLAN.md
-    └── NPM_PUBLISH.md      ← 本地文件，不入库（gitignore）
+    └── REPO_MAP.md         ← 代码地图：文件职责 / 任务→文件索引
 ~~~
 
 ## 常用命令
@@ -77,6 +77,8 @@ agent-git-bash/
 - 用代码运行时模板改文件时的转义约定：反引号会终止模板串、`$` + `{` 会插值（`String.raw` 也挡不住）。
   稳妥做法：先用 read 取出旧文本原样拼接成 `old_string`，再按行数组拼 `new_string`，不要在模板里内联整段文件。
 - 日志只走 stderr（stdout 是 MCP 协议通道，绝不能打印日志）。
+- `exec` 描述与 server 的 MCP `instructions` 里「Windows 上优先用它」是采纳率手段；改措辞要同步 `test/test-client.mjs` 与 README。
+- `server.js` 的 `instructions` 是服务端行为（`initialize` 返回），不是工具参数；别塞进 `registerTool`。
 
 ## 完成定义（Definition of Done）
 
@@ -84,4 +86,4 @@ agent-git-bash/
 - [ ] `npm pack --dry-run` 只列出源码（`bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`），不含 `docs/` 与测试文件
 - [ ] `gitbash-mcp init --dry-run` 能正确预览各客户端配置
 - [ ] 缺 bash 时服务仍能启动并给出 `BASH_NOT_FOUND` + 修复指引
-- [ ] README / DESIGN / PLAN 与代码同步
+- [ ] README / DESIGN / PLAN / REPO_MAP 与代码同步

@@ -6,5 +6,3 @@ test-out.log
 *.log
 .DS_Store
 
-# 本地发布手册，不入库
-docs/NPM_PUBLISH.md
