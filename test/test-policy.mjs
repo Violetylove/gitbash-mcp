@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseCommand } from '../lib/shell-parse.js'
-import { evaluateCommand, decide, currentStance, describePolicy, lists } from '../lib/policy.js'
+import { evaluateCommand, decide, currentStance, describePolicy, pathconvAdvice, describePathconv, lists } from '../lib/policy.js'
 
 // Stay hermetic: an allow-stance parent (e.g. this suite launched through the
 // gitbash MCP with GITBASH_MCP_RISKY=allow) would otherwise flip every
@@ -122,6 +122,21 @@ for (const entry of CASES) {
   if (got !== entry[1]) { bad++; console.log('FAIL  expected ' + entry[1] + ', got ' + got + '  <- ' + entry[0]) }
 }
 assert(bad === 0, 'every command lands in the expected tier', bad + ' mismatches')
+
+console.log('== msys path-conversion escape ==')
+const escOff = pathconvAdvice('cmd //c echo hi', { conversionOn: false })
+assert(escOff.length === 1 && escOff[0].severity === 'error' && escOff[0].program === 'cmd', '//c under conversion-off is an error', JSON.stringify(escOff))
+assert(pathconvAdvice('cmd /c echo hi', { conversionOn: false }).length === 0, 'the single-slash switch is correct while conversion is off')
+assert(pathconvAdvice('cmd //c echo hi', { conversionOn: true }).length === 0, '//c is correct while conversion is on')
+const escOn = pathconvAdvice('cmd /c echo hi', { conversionOn: true })
+assert(escOn.length === 1 && escOn[0].severity === 'error', '/c under conversion-on is an error', JSON.stringify(escOn))
+assert(pathconvAdvice('cmd /c echo //FI', { conversionOn: false }).length === 0, 'an escape-shaped argument in data position is not flagged')
+assert(pathconvAdvice('echo //FI', { conversionOn: false }).length === 0, 'a program that just prints its args is not warned about')
+const escWarn = pathconvAdvice('tasklist //FI "IMAGENAME eq x"', { conversionOn: false })
+assert(escWarn.length === 1 && escWarn[0].severity === 'warning' && escWarn[0].program === 'tasklist', 'another native program gets a warning, not an error', JSON.stringify(escWarn))
+assert(pathconvAdvice('ls //server/share', { conversionOn: false }).length === 0, 'a UNC path is not a flag escape')
+assert(String(describePathconv(escOff[0])).includes('cmd /c'), 'the message names the corrected form', describePathconv(escOff[0]).slice(0, 90))
+assert(String(describePathconv(escOff[0])).includes('MSYS_NO_PATHCONV'), 'the message names the escape hatch', describePathconv(escOff[0]).slice(0, 90))
 
 console.log('== project-declared entry points ==')
 const proj = mkdtempSync(join(tmpdir(), 'gbm-proj-'))

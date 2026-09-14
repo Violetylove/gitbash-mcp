@@ -114,12 +114,23 @@ if (!d.bashPath) {
   assert(hand.detached === true, 'a command with a long budget is handed over, not killed')
   const adopted = adopt(hand.handle, { command: 'handoff probe', cwd: process.cwd() })
   assert(adopted.status === 'running' && jobPayload(adopted).still_running === true, 'the adopted job is still running')
+  assert(jobPayload(adopted).timeout_ms === 0, 'the handover clears the lifetime nobody is waiting on', jobPayload(adopted).timeout_ms)
   assert(jobPayload(adopted).stdout.includes('partial'), 'its output so far is readable', jobPayload(adopted).stdout)
   const stopped = killJob(adopted.id)
   await waitForJob(stopped, 6000)
   assert(adopted.status === 'killed' && adopted.killedBy === 'kill', 'job_kill ends it explicitly', adopted.status + '/' + adopted.killedBy)
   const short = await runWithForegroundBudget(d.bashPath, 'sleep 5', { timeoutMs: 1200, waitMs: 45000 })
   assert(short.detached !== true && short.result.killed_by === 'timeout', 'a budget below the ceiling is still killed as a timeout', short.result && short.result.killed_by)
+
+  // v3 BUG-1: a handed-over command must outlive the timeout_ms it inherited,
+  // otherwise the handover's "not killed" promise is a lie 15s later.
+  const brief = await runWithForegroundBudget(d.bashPath, 'echo kept; sleep 4; echo late-kept', { timeoutMs: 1200, waitMs: 300 })
+  assert(brief.detached === true && brief.handle.timeoutMs === 0, 'a handover fires before the short lifetime and clears it', String(brief.handle.timeoutMs))
+  const keptJob = adopt(brief.handle, { command: 'outlive old timeout', cwd: process.cwd() })
+  await sleep(1800)
+  assert(jobPayload(keptJob).still_running === true, 'it is still running well past the old timeout_ms', JSON.stringify({ status: jobPayload(keptJob).status, timeout_ms: jobPayload(keptJob).timeout_ms }))
+  killJob(keptJob.id)
+  await waitForJob(keptJob, 6000)
 
   const ctl = new AbortController()
   const pendingCancel = runWithForegroundBudget(d.bashPath, 'echo cancel-start; sleep 5; echo late-cancel', { timeoutMs: 30000, waitMs: 20000, signal: ctl.signal })
@@ -129,6 +140,7 @@ if (!d.bashPath) {
   assert(cancelled.detached === true && cancelled.cancelled === true, 'a cancelled call is handed over instead of killed', JSON.stringify({ d: cancelled.detached, c: cancelled.cancelled }))
   const cancelJob = adopt(cancelled.handle, { command: 'cancel probe', cwd: process.cwd() })
   assert(jobPayload(cancelJob).still_running === true, 'the cancelled command is still running as a job')
+  assert(jobPayload(cancelJob).timeout_ms === 0, 'cancelling also clears the lifetime', jobPayload(cancelJob).timeout_ms)
   assert(jobPayload(cancelJob).stdout.includes('cancel-start'), 'its output survived the cancellation', jobPayload(cancelJob).stdout)
   killJob(cancelJob.id)
   await waitForJob(cancelJob, 6000)

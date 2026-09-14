@@ -151,6 +151,23 @@ try {
     assert(full.includes('line-1') && full.includes('line-20000'), 'spill file has full content', full.length)
   }
 
+  console.log('== msys path conversion: /c works, //c is refused instead of hanging ==')
+  step('calling cmd /c and cmd //c')
+  const rcmd = await client.callTool({ name: 'exec', arguments: { command: 'cmd /c echo pathconv-ok' } })
+  const jcmd = JSON.parse(rcmd.content[0].text)
+  assert(jcmd.exit_code === 0 && String(jcmd.stdout).includes('pathconv-ok'), 'cmd /c runs with conversion off', JSON.stringify({ c: jcmd.exit_code, o: jcmd.stdout }))
+  const escStart = Date.now()
+  const resc = await client.callTool({ name: 'exec', arguments: { command: 'cmd //c echo never-runs' } })
+  const escElapsed = Date.now() - escStart
+  const jesc = JSON.parse(resc.content[0].text)
+  assert(escElapsed < 5000, 'the refused form returns immediately instead of hanging for its timeout', String(escElapsed))
+  assert(jesc.error_code === 'PATHCONV_ESCAPE' && resc.isError !== true, 'the //c escape is a structured refusal, not a tool error', jesc.error_code)
+  assert(!String(jesc.stdout).includes('never-runs'), 'it really did not run', jesc.stdout)
+  assert(String(jesc.hint).includes('cmd /c') && String(jesc.hint).includes('MSYS_NO_PATHCONV'), 'the refusal names the fix and the escape hatch', String(jesc.hint).slice(0, 140))
+  const ron = await client.callTool({ name: 'exec', arguments: { command: 'cmd //c echo pathconv-on', env: { MSYS_NO_PATHCONV: '' } } })
+  const jon = JSON.parse(ron.content[0].text)
+  assert(jon.exit_code === 0 && String(jon.stdout).includes('pathconv-on'), 'with conversion restored the legacy //c idiom works again', JSON.stringify({ c: jon.exit_code, o: jon.stdout }))
+
   console.log('== bash_info ==')
   step('calling bash_info')
   const r6 = await client.callTool({ name: 'bash_info', arguments: {} })

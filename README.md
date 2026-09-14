@@ -86,26 +86,46 @@ gitbash-mcp uninstall     # 反向移除，只删自己的条目
 | `timed_out` | 前台等待没等到结束（配合 `still_running` 区分「被杀」还是「转后台」） |
 | `still_running` | `true` = 命令还活着，用 `job_id` 取回 |
 | `killed_by` | `timeout`（生命期到点）/ `kill`（`job_kill`）/ `null` |
-| `duration_ms` / `timeout_ms` / `queued_ms` | 实际耗时 / 生效的生命期 / 因并发上限排队的时间 |
+| `timeout_ms` | **本次调用实际生效的生命期**；命令被移交后台后为 `0`（见下） |
+| `duration_ms` / `queued_ms` | 实际耗时 / 因并发上限排队的时间 |
 | `audit_id` | 这次调用的审计记录 id |
 | `policy` | 一行裁决：`"allow"` 或 `"allow-risky (...)"` |
 | `hint` | 超时、转后台、排队超时、缺 bash 时的下一步建议 |
+| `warnings` | 只在可疑写法时出现，例如 `//FI` 这类旧式路径转义（见下） |
 
 - **命令失败也是这个结构**（非零退出 / 超时 / spawn 失败都返回 JSON，不抛工具错误）
 - 每次调用都是新进程，状态不保留（用 `cd` 或传 `cwd`）
-- **默认设 `MSYS_NO_PATHCONV=1`**：MSYS 不会再把 `/bin/sh` 这类参数改写成 Windows 路径传给 docker、kubectl
-  等原生程序。要恢复旧行为就传 `env: {"MSYS_NO_PATHCONV": ""}`
+
+### ⚠️ 从 2.3 升级：`//c` 写法要改成 `/c`
+
+本 server **默认关掉 MSYS 路径转换**（`MSYS_NO_PATHCONV=1`），这样 `/bin/sh` 这类参数不再被改写成
+Windows 路径，`docker run --rm --entrypoint /bin/sh …` 才能正常工作。副作用是 MSYS 的 `//x` 转义一起失效：
+
+| 写法 | 2.3（转换开启） | 现在（转换关闭） |
+|---|---|---|
+| `cmd /c echo hi` | ✗ 参数被改写成 `C:/` | ✓ 正常 |
+| `cmd //c echo hi` | ✓ 正常 | ✗ 被**拒绝执行**（见下） |
+| `tasklist //FI "…"` | ✓ | ✗ 报「无效参数」，结果里附一行 `warnings` |
+
+`cmd //c` 如果照直跑会**静默挂死**（cmd 收到 `//c` 后打印 banner 并等 stdin），所以工具直接拒绝它，
+返回 `error_code: PATHCONV_ESCAPE` 并在 `hint` 里给出正确写法与逃生口。两种恢复方式：
+
+- 单次调用改回旧行为：`exec { command: "cmd //c …", env: {"MSYS_NO_PATHCONV": ""} }`
+- 或者照新规则写：`cmd /c …`（把这行加进你的提示词/脚本即可）
 
 ### 长任务：前台 45 秒封顶 + 后台作业
 
 **一次前台调用最多等 45 秒**。超过时命令**不会被杀**，而是转成后台作业继续跑，返回体带上 `job_id`：
 
 ~~~jsonc
-{ "timed_out": true, "still_running": true, "job_id": "job-...", "exit_code": null, "hint": "..." }
+{ "timed_out": true, "still_running": true, "job_id": "job-...", "exit_code": null, "timeout_ms": 0, "hint": "..." }
 ~~~
 
 为什么是 45 秒：MCP 客户端自己有一道请求超时（官方 SDK 默认 **60 秒**），到点它会取消请求。
 45 秒让本 server 总是先返回结构化结果，调用方不必去猜 `MCP error -32001: Request timed out` 背后到底发生了什么。
+
+移交之后命令**不再有生命期**（`timeout_ms` 变成 `0`）：`timeout_ms` 的语义是「**调用方愿意等多久**」，
+而调用方已经不等了，剩下的时间不该继续倒计时把成果销毁。命令会一直跑到自己结束。
 
 要跑长任务就直接说：
 
@@ -116,7 +136,7 @@ gitbash-mcp uninstall     # 反向移除，只删自己的条目
 | `job_list` | 列出本 server 起的作业、状态、退出码 |
 | `job_kill {job_id}` | 显式停止（杀整棵树） |
 
-**什么会杀进程树**：只有 `timeout_ms` 到点、`job_kill`，以及 server 退出。
+**什么会杀进程树**：只有 `timeout_ms` 在**前台等待期内**到点、`job_kill`，以及 server 退出。
 **取消一次调用不等于丢掉成果**：客户端超时和用户打断在协议上是同一个信号，无法区分，所以 server 选择
 「提升为作业继续跑」——成果可以用 `job_list` 找回，要停就显式 `job_kill`。
 

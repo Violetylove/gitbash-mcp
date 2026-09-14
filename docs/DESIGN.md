@@ -70,13 +70,15 @@ Windows 上优先用 `exec`，长任务用 `run_in_background`，把原生 Power
   "spill_truncated": false, // spill 文件本身是否封顶截断
   "duration_ms": 123,      // 实际耗时
   "killed_by": null,       // 'timeout' | 'kill' | null（取消不再杀进程，见 §5.10）
-  "timeout_ms": 60000,     // 本次实际生效的生命期
+  "timeout_ms": 60000,     // 本次调用实际生效的生命期；被移交后台后为 0（§5.11）
   "queued_ms": 0,          // 因并发上限而排队的时间
   "audit_id": "...",       // 该次调用的审计记录 id
   "job_id": "job-...",     // 仅在命令被移交后台时出现
   "policy": "allow",       // 一行裁决：'allow' | 'allow-risky (tier, stance=..., see the policy tool)'
   "hint": "...",           // 超时 / 转后台 / 排队超时 / 缺 bash 时的下一步建议
+  "warnings": ["..."],     // 可疑写法（旧式 //FI 转义），见 §5.15
   "error_code": "APPROVAL_REQUIRED", // 被策略拦住时：APPROVAL_REQUIRED | POLICY_DENIED
+  "error_code": "PATHCONV_ESCAPE",   // 旧式 //c：拒绝执行而不是挂死，见 §5.15
   "category": "dangerous",
   "matched_rules": ["recursive delete"],
   "error_code": "EXEC_QUEUE_TIMEOUT", // 排队吃掉整个前台预算（没启动）
@@ -250,6 +252,10 @@ MCP server 是**跨调用长期存活的独立进程**（stdio，一个会话一
    代价是「按停止」不再立即断掉命令——这是刻意取舍，用 `job_kill` 换「长任务永不白跑」。
 3. **前台预算到点也移交**（§5.11）。三条路径（正常结束 / 生命期超时 / 预算或取消）都产出结构化结果，
    调用方永远不用猜「活儿还在不在」。
+4. **移交即清零时限**。`timeout_ms` 的语义是「调用方愿意等多久」；调用方已经不等了，剩下的时间不该继续倒计时摧毁成果。
+   v2 只做了移交、保留了时限，结果默认配置下窗口只有 15 秒（45s 软期限 vs 60s 默认时限）：调用方拿到
+   「没被杀，去 job_output 取结果」的承诺，15 秒后进程被销毁、输出为空。移交现在把生命期设为 0，
+   命令跑到自然结束；唯一的停止手段是 `job_kill` / server 退出。
 
 作业输出复用 `launch()` 的输出通道：内存留头部 64KB（前台结果要用），spill 文件留全文（作业轮询要 tail/offset）。
 作业注册表只保留最近 `MAX_RETAINED_JOBS = 32` 条已完成记录；server 退出时 `killAllJobs()`，不留孤儿 bash 树。
@@ -263,6 +269,29 @@ MCP server 是**跨调用长期存活的独立进程**（stdio，一个会话一
 45s 留出 15s 余量（进程启动 + 结果序列化 + 传输），保证本 server 的 JSON 总是**先**到。
 调用方要更长的等待就用 `run_in_background: true` 或 `job_output {wait: true}`，两者的等待都发生在
 「已经返回过的请求」之外。
+
+软期限只约束**这次调用愿意等多久**，它不再继承成进程生命期：到点移交时 `timeout_ms` 归零（§5.10.4），
+所以「默认 60s 时限」不会在移交后 15 秒把命令杀掉。
+
+### 5.15 路径转换默认关闭，以及 `//x` 转义的迁移
+
+`MSYS_NO_PATHCONV=1`（§5.13）修掉了「`/bin/sh` 被改写成 `C:/…/usr/bin/sh`」，但 MSYS 的 `//x` 转义
+（`//c` 表示字面量 `/c`）只在转换**开启**时才有意义。实测三种写法：
+
+| 写法 | 转换开启 | 转换关闭（默认） |
+|---|---|---|
+| `cmd /c …` | ✗ 被改写成 `C:/` | ✓ |
+| `cmd //c …` | ✓ | ✗ **静默挂死**（cmd 打印 banner 后等 stdin） |
+| `tasklist //FI …` | ✓ | ✗ 报「无效参数」（响亮失败） |
+
+两种写法无法在一个全局 env 下共存（实测：`MSYS2_ARG_CONV_EXCL` 只支持**参数前缀**，不支持
+`program:prefix` 作用域，所以做不到「只对 docker 关转换」）。选择是：默认关闭（让 unix 风格参数直达原生程序，
+且 `cmd /c` 这种自然写法可用），对**唯一会挂死**的形态做前置拒绝：
+
+- cmd 家族 + 转义出现在开关位（第一个参数）→ `error_code: PATHCONV_ESCAPE`，附带正确写法与逃生口，**不执行**；
+- 其它程序 + 同样形态 → 结果里多一行 `warnings`（它们会自己报错，不必拦）；
+- 数据位（`cmd /c echo //c`）与 `//server/share`（UNC）不误报；
+- 逃生口：`env {"MSYS_NO_PATHCONV": ""}` 恢复转换，此时改成反向规则（`cmd /c` 会被拒绝，`cmd //c` 可用）。
 
 ### 5.12 `policy` 只回一行
 
@@ -305,13 +334,16 @@ DSH 也可用面板插件注册。
 | 手写 stdio JSON-RPC（零依赖） | 可降到 ~20KB，但需自维协议层；当前保留官方 SDK（零风险） |
 | **照抄宿主（DSH）的后台作业机制** | 宿主是那批子进程的 owner，而且它自己就是客户端；MCP server 是独立进程，架构不同。server 自建注册表 + 自暴露 `job_*` 工具即可，不需要宿主配合（§5.10） |
 | 让 `timeout_ms` 端到端生效（>60s 的前台调用） | 那道超时在客户端进程里，server 无法覆盖；改为自设 45s 软期限 + 移交后台（§5.11） |
+| 只对 docker/kubectl 等程序关闭路径转换 | MSYS 只提供全局开关与**参数前缀**级的 `MSYS2_ARG_CONV_EXCL`（实测 `node:/bin` 无效），做不到程序级作用域（§5.15） |
+| 把 `//c` 自动改写为 `/c` 后照跑 | 需要按原样重写用户命令，涉及引号/转义保真（解析器只给出去引号后的词，没有原文 span）；宁可前置拒绝并给出改法，也不做可能改坏命令的魔法 |
 
 ## 8. 测试策略
 
 `node test/test-client.mjs` 覆盖：工具握手与列举（含三个 job 工具）、`doctor` 报告、回显、**管道**、非零退出码、
 **生命期超时整树杀**（`timed_out` + `still_running: false` + `timeout_ms` + hint）、**后台作业全流程**
 （立即返回句柄 → 中途轮询到部分输出 → `wait: true` 收退出码 → `offset_bytes` 增量 → `job_list` → `job_kill`）、
-**取消 = 移交**（abort 后调用被拒，但作业仍出现在 `job_list` 并能 `job_kill`）、**超 64KB 截断 + spill 全量校验**、
+**取消 = 移交**（abort 后调用被拒，但作业仍出现在 `job_list` 并能 `job_kill`）、**路径转换**（`cmd /c` 正常、
+`cmd //c` 立即返回 `PATHCONV_ESCAPE` 而不是挂死、`env` 逃生口让旧写法复活）、**超 64KB 截断 + spill 全量校验**、
 空命令报错、`policy` 一行裁决、**缺 bash 降级**（清洗 env 拉起第二个实例，断言 `BASH_NOT_FOUND` + 修复指引 + doctor 报 NOT FOUND）。
 
 `node test/test-cli.mjs` 覆盖 CLI：help/version/doctor、`--dry-run` 不落盘、init 写入并保留既有内容、备份生成、
@@ -319,10 +351,12 @@ DSH 也可用面板插件注册。
 
 `node test/test-runner.mjs` 单测 P0 护栏与执行原语：环境洗白与 `MSYS_NO_PATHCONV` 默认/撤销、
 spill 内存与磁盘双重封顶、通道的 tail/offset 读、信号量并发峰值与 `queuedMs`、**取消即杀**（`spawnBash` 的默认语义，用延迟写入的标记文件验证树真死）、
-**前台预算到点移交而非杀**、**取消移交而非杀**、后台作业生命周期与审计落盘、审计 JSONL 往返与轮转。
+**前台预算到点移交而非杀**、**移交/取消后时限归零**（v3 BUG-1：跨过原 `timeout_ms` 后仍在跑）、
+**取消移交而非杀**、后台作业生命周期与审计落盘、审计 JSONL 往返与轮转。
 
 `node test/test-policy.mjs` 覆盖策略：50+ 个档位分类用例（含 `for`/`do`/`done`/`{`/`}` 关键字、`2>&1`、`&>`、
-`>/dev/null` 等 v2 反馈的解析回归）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
+`>/dev/null` 等 v2 反馈的解析回归）、**路径转换转义的判定**（v3 BUG-2：cmd 硬拒绝、其它程序警告、
+数据位与 UNC 不误报、转换开启时的反向规则）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
 
 > 五套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
 > 审计写入用临时 `LOCALAPPDATA`，不会污染真实日志。

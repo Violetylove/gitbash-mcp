@@ -1,25 +1,10 @@
 #!/usr/bin/env node
 /**
- * gitbash-mcp MCP server: execute git-bash (MSYS2) commands outside the agent
- * sandbox. Spawned over stdio by an MCP client (DSH, Claude Code, Codex, ...),
- * it is not subject to DSH's WRITE_RESTRICTED token, so bash.exe can create its
- * signal pipe and captured-stdio spawns work (both fail inside the sandbox).
- *
- * Result contract (docs/DESIGN.md section 4.1):
- *   { exit_code, stdout, stderr, timed_out, still_running, truncated,
- *     spill_path, spill_bytes, spill_truncated, duration_ms, killed_by,
- *     timeout_ms, audit_id, queued_ms, policy?, job_id? }
- * plus error_code/category/matched_rules/hint when the policy blocks a command,
- * git-bash is missing, the concurrency gate ate the call, or a job id is
- * unknown. Command failures return JSON and never raise a tool error; only
- * invalid arguments raise.
- *
- * Guardrails:
- *   P0 (always on): cancellation kills the tree, bounded concurrency, capped
- *   memory + capped spill file, credential-shaped env scrubbed, audit log.
- *   P1 (one switch): the policy engine blocks dangerous commands. The single
- *   stance switch is GITBASH_MCP_RISKY=ask (default) | allow, set by the human
- *   in the MCP client config - never by the model.
+ * gitbash-mcp MCP server: run git-bash (MSYS2) commands outside the agent
+ * sandbox, over stdio. Result contract and guardrails: docs/DESIGN.md §4/§5.
+ *   - command failures return JSON and never raise a tool error
+ *   - only invalid arguments raise
+ *   - long work goes to the job registry instead of being killed by a timeout
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -35,9 +20,9 @@ import {
   MAX_BACKGROUND_JOBS, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS,
 } from './lib/jobs.js'
 import { appendAudit } from './lib/audit.js'
-import { decide, describePolicy } from './lib/policy.js'
+import { decide, describePolicy, pathconvAdvice, describePathconv } from './lib/policy.js'
 
-const VERSION = '2.4.0'
+const VERSION = '2.4.1'
 const gate = createSemaphore(MAX_CONCURRENCY)
 
 function newAuditId() {
@@ -90,11 +75,9 @@ function clampTimeout(value) {
 }
 
 /**
- * Default working directory. The process cwd of a stdio MCP server is whatever
- * the client happened to launch it in, which is rarely what the caller wants,
- * so ask the client for its roots (MCP standard) and cache the first one that
- * exists. Fully best-effort: any client that does not answer falls back to the
- * process cwd, as before.
+ * Default working directory: the client's first MCP root that exists, else the
+ * server process cwd. Best-effort and cached; the server's own cwd is usually
+ * wherever the client was installed, which is never what the caller wants.
  */
 let defaultCwdPromise = null
 function defaultCwd() {
@@ -144,6 +127,7 @@ server.registerTool(
       'Use for bash/git workflows: git, grep/sed/awk pipelines, shell loops, make, scripts. ' +
       'This bridge runs OUTSIDE the agent sandbox: pipes work here that a sandboxed shell tool cannot create, and MSYS_NO_PATHCONV=1 is set by default ' +
       'so unix-style arguments (docker run --entrypoint /bin/sh) reach native Windows programs unchanged; pass env {"MSYS_NO_PATHCONV": ""} to turn that off. ' +
+      'With conversion off, write `cmd /c ...` - the legacy `cmd //c` escape is refused (error_code PATHCONV_ESCAPE) because cmd.exe would ignore it and wait on stdin. ' +
       'Each call starts a fresh bash process; state does not persist between calls (use cd in the command or pass cwd). ' +
       'LONG COMMANDS: pass run_in_background: true to get a job id in milliseconds - the command then outlives this request, is immune to the client request timeout, ' +
       'and is read with job_output / stopped with job_kill. Without it the call is foreground: the wait is capped at ' + FOREGROUND_MS + 'ms, and a command still running at that point is ' +
@@ -214,6 +198,25 @@ server.registerTool(
     const requested = clampTimeout(args.timeout_ms)
     const login = args.login === true
     const env = args.env && typeof args.env === 'object' ? args.env : undefined
+    // Conversion is off by default; env {"MSYS_NO_PATHCONV": ""} turns it back on.
+    const conversionOn = env !== undefined && env.MSYS_NO_PATHCONV === ''
+    const advice = pathconvAdvice(args.command, { conversionOn })
+    const warnings = advice.filter((a) => a.severity === 'warning').map(describePathconv)
+    const fatal = advice.find((a) => a.severity === 'error')
+    if (fatal !== undefined) {
+      const payload = Object.assign(baseResult(), {
+        stderr: describePathconv(fatal),
+        error_code: 'PATHCONV_ESCAPE',
+        hint: 'This command was refused instead of run: it would have hung until its timeout. ' + describePathconv(fatal),
+        audit_id: auditId,
+        policy,
+      })
+      appendAudit({
+        id: auditId, ts: new Date().toISOString(), tool: 'exec', decision: 'refuse',
+        error_code: 'PATHCONV_ESCAPE', command: args.command, cwd, arg: fatal.arg, program: fatal.program,
+      })
+      return json(payload)
+    }
 
     if (args.run_in_background === true) {
       const running = runningJobCount('background')
@@ -235,7 +238,7 @@ server.registerTool(
         id: auditId, ts: new Date().toISOString(), tool: 'exec', phase: 'start', background: true,
         job_id: job.id, decision: verdict.decision, tier: verdict.tier, command: args.command, cwd,
       })
-      return json({
+      const started = {
         job_id: job.id,
         status: 'running',
         still_running: true,
@@ -248,7 +251,9 @@ server.registerTool(
         policy,
         hint: 'Poll it with job_output (wait: true blocks until it finishes or timeout_ms), stop it with job_kill. ' +
           'Its lifetime is not tied to this request, so no client timeout can kill it.',
-      })
+      }
+      if (warnings.length > 0) started.warnings = warnings
+      return json(started)
     }
 
     const callStart = Date.now()
@@ -282,6 +287,7 @@ server.registerTool(
         audit_id: auditId,
         policy,
       })
+      if (warnings.length > 0) payload.warnings = warnings
       appendAudit({
         id: auditId, ts: new Date().toISOString(), tool: 'exec', phase: 'queue-timeout', decision: verdict.decision,
         tier: verdict.tier, command: args.command, cwd, queued_ms: queuedMs,
@@ -307,16 +313,18 @@ server.registerTool(
         pid: r.detached.pid,
         duration_ms: Date.now() - callStart,
         queued_ms: queuedMs,
-        timeout_ms: requested,
+        // A handover clears the lifetime (nobody is waiting any more).
+        timeout_ms: r.handle.timeoutMs,
         audit_id: auditId,
         policy,
       })
+      if (warnings.length > 0) payload.warnings = warnings
       return json(withHint(payload, r.cancelled === true
-        ? 'the MCP request was cancelled before the command finished, so it was NOT killed: it keeps running as ' + r.detached.id + ' ' +
-          '(timeout_ms ' + (requested > 0 ? requested : 'none') + ' still applies). Find it with job_list, read it with job_output, stop it with job_kill.'
+        ? 'the MCP request was cancelled before the command finished, so it was NOT killed: it keeps running as ' + r.detached.id + ' with no time limit. ' +
+          'Find it with job_list, read it with job_output, stop it with job_kill.'
         : 'the foreground wait is capped at ' + FOREGROUND_MS + 'ms so this call returns before the client request timeout. ' +
-          'The command was NOT killed: it keeps running as ' + r.detached.id + ' (timeout_ms ' + requested + ' still applies). ' +
-          'Read it with job_output, stop it with job_kill, or start long work with run_in_background: true next time.'))
+          'The command was NOT killed and no longer has a time limit (the ' + requested + 'ms budget applied to this call, not to a process nobody is waiting for): ' +
+          'it runs as ' + r.detached.id + ' until it finishes on its own. Read it with job_output, stop it with job_kill.'))
     }
 
     const result = r.result
@@ -327,6 +335,7 @@ server.registerTool(
       audit_id: auditId,
       policy,
     })
+    if (warnings.length > 0) payload.warnings = warnings
     if (result.killed_by === 'timeout') {
       withHint(payload, 'killed after the ' + requested + 'ms timeout (whole process tree). If it needs longer, re-run it with run_in_background: true.')
     } else if (result.killed_by === 'cancel') {

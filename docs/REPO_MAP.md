@@ -67,7 +67,7 @@ gitbash-mcp/
 | `runner.js` | `launch` `runWithForegroundBudget` `spawnBash` `createChannel` `collectStream` `readChannelText` `createSemaphore` `killTree` `scrubEnv` `buildEnv` | 常量：`DEFAULT_TIMEOUT_MS=60000` `MAX_TIMEOUT_MS=600000` `FOREGROUND_MS=45000` `QUEUE_FLOOR_MS=250` `OUTPUT_CAP_BYTES=64KB` `SPILL_CAP_BYTES=64MB` `JOB_TAIL_BYTES=64KB` `MAX_CONCURRENCY=4` `KILL_GRACE_MS=1500` `MSYS_NO_PATHCONV='1'`；`launch.cancelAction='report'` = 取消不移交则杀的分界线 |
 | `jobs.js` | `startJob` `adopt` `getJob` `listJobs` `runningJobCount` `waitForJob` `killJob` `killAllJobs` `jobPayload` | 常量：`MAX_BACKGROUND_JOBS=8` `MAX_RETAINED_JOBS=32` `MAX_JOB_WAIT_MS=50000`；作业元数据只在进程内，审计落 `log_path` |
 | `shell-parse.js` | `parseCommand` | 纯函数；here-doc 正文跳过；shell 关键字（`for`/`do`/`done`/`{`/`}`/`then`/`fi`…）不再当程序名；`2>&1`/`&>`/`/dev/null` 正确归类；`$( )`/反引号/`$'…'`/变量程序名/子 shell → `opaque` |
-| `policy.js` | `evaluateCommand` `decide` `currentStance` `describePolicy` `projectEntry` `lists` | 档位：read-only / project / ask-required / dangerous / catastrophic；唯一开关 `GITBASH_MCP_RISKY`；reason 去重 |
+| `policy.js` | `evaluateCommand` `decide` `currentStance` `describePolicy` `pathconvAdvice` `describePathconv` `projectEntry` `lists` | 档位：read-only / project / ask-required / dangerous / catastrophic；唯一开关 `GITBASH_MCP_RISKY`；reason 去重；`MSYS_NO_PATHCONV` 下的 `//x` 转义判定（§5.15） |
 | `audit.js` | `appendAudit` `readAudit` `auditPath` `auditDir` `AUDIT_MAX_BYTES` | JSONL；`AUDIT_MAX_BYTES = 5MB` 后轮转到 `.1.jsonl` |
 | `menu.js` | `createMenuState` `reduceMenu` `menuRows` `menuLines` `renderFrame` `paintFrame` `readCheckboxMenu` | 按键逻辑是纯 reducer，可无 TTY 单测 |
 | `theme.js` | `makeStyler` `esc` | ANSI 颜色与转义序列 |
@@ -89,7 +89,7 @@ gitbash-mcp/
 
 ## 6. 契约与常量速查
 
-- **结果契约**（`exec`，见 `DESIGN.md` §4.1）：`exit_code / stdout / stderr / timed_out / still_running / truncated / spill_path / spill_bytes / spill_truncated / duration_ms / killed_by / timeout_ms / audit_id / queued_ms / policy`，外加移交时的 `job_id`、缺 bash 时的 `error_code` / `hint`、排队超时的 `EXEC_QUEUE_TIMEOUT`、作业超限的 `TOO_MANY_JOBS`。
+- **结果契约**（`exec`，见 `DESIGN.md` §4.1）：`exit_code / stdout / stderr / timed_out / still_running / truncated / spill_path / spill_bytes / spill_truncated / duration_ms / killed_by / timeout_ms / audit_id / queued_ms / policy / warnings`，外加移交时的 `job_id`、缺 bash 时的 `error_code` / `hint`、排队超时的 `EXEC_QUEUE_TIMEOUT`、作业超限的 `TOO_MANY_JOBS`、旧式 `//c` 的 `PATHCONV_ESCAPE`。
 - **作业契约**（`job_output`，见 `DESIGN.md` §4.5）：`status / still_running / exit_code / killed_by / timeout_ms / stdout / stderr / next_offset / stdout_bytes / stderr_bytes / log_path`。
 - **唯一环境变量**：`GITBASH_MCP_RISKY=ask`（默认）/ `allow`，由人类在 MCP 客户端配置里注入，模型不得自行设置。
 - **日志只走 stderr**：stdout 是 MCP 协议通道。
@@ -105,6 +105,7 @@ gitbash-mcp/
 | 后台作业（注册表 / 输出读取 / 停止 / 上限） | `lib/jobs.js` | `test/test-runner.mjs`、`test/test-client.mjs` |
 | 解析（切段 / 引号 / 关键字 / 重定向 / opaque） | `lib/shell-parse.js` | `test/test-policy.mjs` |
 | 档位 / 裁决 / 项目信任 / 姿态 | `lib/policy.js` | `test/test-policy.mjs` |
+| 路径转换转义的判定（`//c` / `//FI`） | `lib/policy.js` | `test/test-policy.mjs`、`test/test-client.mjs` |
 | 审计格式 / 轮转 | `lib/audit.js` | `test/test-runner.mjs` |
 | CLI 客户端写入 / 探测 | `lib/cli.js` | `test/test-cli.mjs` |
 | 菜单按键 / 配色 | `lib/menu.js`、`lib/theme.js` | `test/test-menu.mjs` |
@@ -116,11 +117,11 @@ gitbash-mcp/
 
 | 套件 | 覆盖 | 能否在受限沙箱内跑 |
 |---|---|---|
-| `test/test-client.mjs` | 工具握手、doctor、管道、非零退出、生命期超时杀树、后台作业全流程、取消移交、spill、策略、缺 bash 降级 | 否（spawn bash + 管道） |
+| `test/test-client.mjs` | 工具握手、doctor、管道、非零退出、生命期超时杀树、后台作业全流程、取消移交、路径转换（`cmd /c` 正常 / `cmd //c` 拒绝而非挂死 / env 逃生口）、spill、策略、缺 bash 降级 | 否（spawn bash + 管道） |
 | `test/test-cli.mjs` | help/version/doctor、dry-run 不落盘、init 写入并保留既有内容、备份、幂等、uninstall | 否（子进程管道） |
 | `test/test-menu.mjs` | 菜单 reducer、选中、渲染、颜色开关 | 是（纯函数） |
-| `test/test-runner.mjs` | 洗白与 `MSYS_NO_PATHCONV`、spill 双重封顶、通道 tail/offset、并发、取消杀树、预算移交、作业生命周期、审计往返与轮转 | 部分（杀树/作业要 bash） |
-| `test/test-policy.mjs` | 解析回归（关键字 / `2>&1` / `/dev/null`）、50+ 档位分类用例、项目信任、姿态裁决、报告 | 是（纯函数） |
+| `test/test-runner.mjs` | 洗白与 `MSYS_NO_PATHCONV`、spill 双重封顶、通道 tail/offset、并发、取消杀树、预算移交、移交后时限归零、作业生命周期、审计往返与轮转 | 部分（杀树/作业要 bash） |
+| `test/test-policy.mjs` | 解析回归（关键字 / `2>&1` / `/dev/null`）、50+ 档位分类用例、路径转换转义判定、项目信任、姿态裁决、报告 | 是（纯函数） |
 
 ## 9. 文档地图
 

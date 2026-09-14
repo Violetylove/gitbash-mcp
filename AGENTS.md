@@ -49,19 +49,20 @@ gitbash-mcp/
 | `node test/test-policy.mjs` | 策略单测（档位 / 裁决 / 报告） |
 | `node bin/gitbash-mcp.js init --dry-run` | 预览会写哪些客户端配置 |
 | `npm pack --dry-run` | 检查发布内容（只含 `bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`） |
-| `npm i -g .` | 从本地仓库全局安装（发布前自测）。npm 对本地目录走 **link** 语义：全局 `node_modules/gitbash-mcp` 会成为指向本仓库的软链接，依赖用仓库的 `node_modules`——所以仓库不能删/挪。要一份自包含副本：`npm pack` 后 `npm i -g gitbash-mcp-2.4.0.tgz` |
+| `npm i -g .` | 从本地仓库全局安装（发布前自测）。npm 对本地目录走 **link** 语义：全局 `node_modules/gitbash-mcp` 会成为指向本仓库的软链接，依赖用仓库的 `node_modules`——所以仓库不能删/挪。要一份自包含副本：`npm pack` 后 `npm i -g gitbash-mcp-<版本>.tgz` |
 
 ## 红线（改代码前必读）
 
 1. **绝不尝试在受限沙箱内跑 bash**：MSYS2 的 signal pipe 会被 WRITE_RESTRICTED 令牌掐死（Win32 error 5）。
 2. **`exec` 的结果契约不可破坏**：`exit_code / stdout / stderr / timed_out / still_running / truncated /
-   spill_path / spill_bytes / spill_truncated / duration_ms / killed_by / timeout_ms / queued_ms / audit_id / policy`
-   （外加移交时的 `job_id`、缺 bash / 排队超时 / 作业超限时的 `error_code` + `hint`）。命令失败回 JSON，不抛工具错误。
+   spill_path / spill_bytes / spill_truncated / duration_ms / killed_by / timeout_ms / queued_ms / audit_id / policy / warnings`
+   （外加移交时的 `job_id`、缺 bash / 排队超时 / 作业超限 / 旧式 `//c` 时的 `error_code` + `hint`）。命令失败回 JSON，不抛工具错误。
 3. **启动永不失败**：bash 探测必须惰性 + 缓存；缺 bash 时服务照常起，由 `exec` / `doctor` 报错。
 4. **`command` 作为单个 argv** 传给 `bash -c/-lc`，不要引入引号转义层。
 5. **长任务的三条不变量（DESIGN §5.10）**：① `run_in_background` 必须毫秒级返回 `job_id`，作业生命期不挂在发起它的请求上；
-   ② 取消（客户端超时与用户按停止在协议上不可区分）与前台预算到点都**移交**进程句柄，绝不杀进程丢成果；
-   ③ 杀整棵树只由 `timeout_ms` 到点、`job_kill`、server 退出触发；`taskkill /pid <pid> /T /F`，只杀父进程会留 MSYS2 孤儿。
+   ② 取消（客户端超时与用户按停止在协议上不可区分）与前台预算到点都**移交**进程句柄并**清零继承的 `timeout_ms`**
+   （否则「没被杀」的承诺会在 15 秒后变成谎言），绝不杀进程丢成果；
+   ③ 杀整棵树只由 `timeout_ms` 在等待期内到点、`job_kill`、server 退出触发；`taskkill /pid <pid> /T /F`，只杀父进程会留 MSYS2 孤儿。
    前台预算常量是 `FOREGROUND_MS`，必须明显小于 MCP 客户端默认的 60s 请求超时。
 6. **护栏必须零配置**：并发/封顶/洗白/审计/作业上限都由代码常量决定。**唯一存在的环境变量**是 `GITBASH_MCP_RISKY`（`ask` 默认 / `allow`），它是人类的同意开关，由 MCP 客户端配置注入——不要为其它目的新增配置项。
 7. **只支持全局安装**：不提供 npx/bunx 方式；`package.json` 的 `files` 白名单必须保持精简。
@@ -79,6 +80,8 @@ gitbash-mcp/
   `menu.js` / `theme.js`（交互）、`cli.js`（CLI）；`server.js` 只保留工具注册与裁决接线。
 - **一条命令只有一条执行路径**：新命令一律走 `runner.js` 的 `launch()`；前台与后台的差别只是
   「等多久、到点怎么办」（`runWithForegroundBudget` / `jobs.startJob`）。别为「转后台」再起一个进程。
+- **不改写调用方的命令文本**：写法必然失败时（如转换关闭下的 `cmd //c`）前置拒绝并给出改法，
+  不要替调用方重写命令——解析器只给出去引号后的词，没有原文 span，改写会破坏引号与转义。
 - 菜单按键逻辑必须是**纯函数**（`reduceMenu`），以便无 TTY 单测；渲染与终端交互分开。
 - **策略不得退回正则黑名单**：`lib/policy.js` 只做能力分类，判读不了就归 `opaque` → ask。
   改 `shell-parse.js` / `policy.js` 必须同步补 `test/test-policy.mjs` 用例（解析器 + 档位 + 姿态裁决）。
