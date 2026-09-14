@@ -95,6 +95,9 @@ gitbash-mcp uninstall     # 反向移除，只删自己的条目
 
 - **命令失败也是这个结构**（非零退出 / 超时 / spawn 失败都返回 JSON，不抛工具错误）
 - 每次调用都是新进程，状态不保留（用 `cd` 或传 `cwd`）
+- **「完成」= shell 进程退出**，不是输出管道关闭：`start`、`&`、`nohup`、daemon 这类残留进程即使还持有管道，
+  也不会再拖住调用（`sleep 20 & echo DONE` 与 `sleep 20 >/dev/null 2>&1 & echo DONE` 现在耗时几乎一样，
+  以前前者要等满 20 秒、还可能被超时连坐杀掉整棵树）。代价是 shell 退出之后那些残留进程再写的内容不再被收集
 
 ### ⚠️ 从 2.3 升级：`//c` 写法要改成 `/c`
 
@@ -187,9 +190,10 @@ exec { command: "for i in $(seq 1 20000); do echo line-$i; done" }
 
 ## 护栏（零配置）
 
-- **并发上限 4**：超出排队并在结果里报 `queued_ms`；排队时间**不计入**命令的 `timeout_ms`，
+- **并发上限 4，只约束前台调用**：超出排队，结果里报 `queued_ms`，排队时间**不计入**命令的 `timeout_ms`；
   若排队吃掉了整个前台预算，返回 `error_code: EXEC_QUEUE_TIMEOUT` 而不是让你干等
-- **后台作业上限 8**：超出返回 `error_code: TOO_MANY_JOBS`
+- **后台作业上限 8**：后台作业**不占**上面那 4 个名额（它不阻塞任何调用方），由这个上限单独约束，
+  超出返回 `error_code: TOO_MANY_JOBS`；后台启动结果同样带 `queued_ms`（未排队时为 `0`），字段在所有返回体里保持一致
 - **输出封顶**：内存单流 64KB，转存文件另有 64MB 上限、24 小时清理
 - **环境洗白**：清掉凭据形状变量（`*_TOKEN` / `*_API_KEY` / `AWS_*` / `*PASSWORD*`），保留 `SSH_AUTH_SOCK`
 - **审计**：每次调用一行 JSONL，`gitbash-mcp audit` 查看

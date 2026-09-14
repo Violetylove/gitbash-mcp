@@ -82,6 +82,10 @@ gitbash-mcp/
   「等多久、到点怎么办」（`runWithForegroundBudget` / `jobs.startJob`）。别为「转后台」再起一个进程。
 - **不改写调用方的命令文本**：写法必然失败时（如转换关闭下的 `cmd //c`）前置拒绝并给出改法，
   不要替调用方重写命令——解析器只给出去引号后的词，没有原文 span，改写会破坏引号与转义。
+- **完成判定只看直接子进程（shell）退出**，管道只多等 `EXIT_DRAIN_MS` 的排水窗口；别退回「等 stdio 全部关闭」，
+  那会让 `start` / `&` / daemon 这类残留持有者把调用拖到超时并连坐杀树（DESIGN §5.16）。
+- **两条并发路径语义固定**：`MAX_CONCURRENCY` 只管前台调用，后台作业由 `MAX_BACKGROUND_JOBS` 管；
+  所有返回体都要带 `queued_ms`（后台恒为 0），字段形状保持一致。
 - 菜单按键逻辑必须是**纯函数**（`reduceMenu`），以便无 TTY 单测；渲染与终端交互分开。
 - **策略不得退回正则黑名单**：`lib/policy.js` 只做能力分类，判读不了就归 `opaque` → ask。
   改 `shell-parse.js` / `policy.js` 必须同步补 `test/test-policy.mjs` 用例（解析器 + 档位 + 姿态裁决）。

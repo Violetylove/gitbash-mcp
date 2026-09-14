@@ -151,6 +151,22 @@ try {
     assert(full.includes('line-1') && full.includes('line-20000'), 'spill file has full content', full.length)
   }
 
+  console.log('== completion: a leftover pipe holder does not hold the call ==')
+  step('calling exec with a backgrounded holder')
+  const detachStart = Date.now()
+  const rdet = await client.callTool({ name: 'exec', arguments: { command: 'sleep 5 & echo detach-done' } })
+  const detachMs = Date.now() - detachStart
+  const jdet = JSON.parse(rdet.content[0].text)
+  assert(detachMs < 3000, 'the call returns when the shell exits, not when the pipe closes', String(detachMs))
+  assert(jdet.exit_code === 0 && String(jdet.stdout).includes('detach-done'), 'the output produced before the exit is returned', JSON.stringify({ c: jdet.exit_code, o: jdet.stdout }))
+  assert(jdet.timed_out === false && jdet.killed_by === null, 'and it is not a timeout', JSON.stringify({ t: jdet.timed_out, k: jdet.killed_by }))
+  const rjdet = await client.callTool({ name: 'exec', arguments: { command: 'sleep 5 & echo job-detach-done', run_in_background: true } })
+  const jjdet = JSON.parse(rjdet.content[0].text)
+  assert(jjdet.queued_ms === 0, 'a background start reports queued_ms like every other result', jjdet.queued_ms)
+  const rwait = await client.callTool({ name: 'job_output', arguments: { job_id: jjdet.job_id, wait: true, timeout_ms: 20000 } })
+  const jwait = JSON.parse(rwait.content[0].text)
+  assert(jwait.still_running === false && String(jwait.stdout).includes('job-detach-done'), 'the job completes as soon as its shell exits', JSON.stringify({ s: jwait.status, o: jwait.stdout }))
+
   console.log('== msys path conversion: /c works, //c is refused instead of hanging ==')
   step('calling cmd /c and cmd //c')
   const rcmd = await client.callTool({ name: 'exec', arguments: { command: 'cmd /c echo pathconv-ok' } })

@@ -118,6 +118,9 @@ PATH 上的 git、**逐条候选路径命中情况**、缺 bash 时的修复步�
 未知 `job_id` 返回 `error_code: JOB_NOT_FOUND`（结构化结果，不是工具错误）。作业元数据只活在 server 进程内（重启即丢句柄），
 但审计日志记了 `job_id` / `command` / `exit_code` / `log_path`，输出文件在 `%TEMP%\gitbash-mcp\`（24h 内可捞）。
 
+后台**启动**的返回体（`run_in_background: true`）：`job_id` `status` `still_running` `pid` `started_at` `timeout_ms`
+`queued_ms`（恒为 0：作业走作业上限，不占前台并发名额）`command` `cwd` `audit_id` `policy`，可疑写法时附 `warnings`。
+
 ### 4.6 CLI（`init` / `uninstall` / `doctor`）
 
 `gitbash-mcp init` 探测本机已安装的客户端并交互式写入 MCP 配置：
@@ -192,9 +195,10 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 
 | 机制 | 实现 | 常量 |
 |---|---|---|
-| 生命期到点杀树 | 单条命令的 `timeout_ms` → `taskkill /T /F`；杀掉后给 1.5s 宽限，不等孤儿进程占着的管道 | `KILL_GRACE_MS = 1500` |
-| 并发上限 | `createSemaphore` FIFO 排队，结果报 `queued_ms`；排队时间不计入 `timeout_ms`（生命期计时从 spawn 开始） | `MAX_CONCURRENCY = 4` |
-| 后台作业上限 | 同时在跑的后台作业数 | `MAX_BACKGROUND_JOBS = 8` |
+| 生命期到点杀树 | 单条命令的 `timeout_ms` → `taskkill /T /F`；杀掉后给 1.5s 宽限，等不到管道关闭也结算（§5.16） | `KILL_GRACE_MS = 1500` |
+| 完成判定 | 以**直接子进程（shell）退出**为准，管道只多等一个短排水窗口 | `EXIT_DRAIN_MS = 250` |
+| 并发上限（前台） | `createSemaphore` FIFO 排队，结果报 `queued_ms`；排队时间不计入 `timeout_ms`（生命期计时从 spawn 开始） | `MAX_CONCURRENCY = 4` |
+| 后台作业上限 | 同时在跑的后台作业数；后台**不占**前台名额（它不阻塞调用方），两者之和就是进程总数上限 | `MAX_BACKGROUND_JOBS = 8` |
 | 输出封顶 | 内存 64KB + spill 文件封顶 | `OUTPUT_CAP_BYTES = 64KB`、`SPILL_CAP_BYTES = 64MB` |
 | 环境洗白 | spawn 前清掉凭据形状变量（`*_TOKEN`/`*_API_KEY`/`AWS_*`/`*PASSWORD*`），保留 `SSH_AUTH_SOCK` | — |
 | 审计 | 每次调用追加 JSONL，`gitbash-mcp audit` 读取；作业另记 start/finish 两行（含 `log_path`） | — |
@@ -273,26 +277,6 @@ MCP server 是**跨调用长期存活的独立进程**（stdio，一个会话一
 软期限只约束**这次调用愿意等多久**，它不再继承成进程生命期：到点移交时 `timeout_ms` 归零（§5.10.4），
 所以「默认 60s 时限」不会在移交后 15 秒把命令杀掉。
 
-### 5.15 路径转换默认关闭，以及 `//x` 转义的迁移
-
-`MSYS_NO_PATHCONV=1`（§5.13）修掉了「`/bin/sh` 被改写成 `C:/…/usr/bin/sh`」，但 MSYS 的 `//x` 转义
-（`//c` 表示字面量 `/c`）只在转换**开启**时才有意义。实测三种写法：
-
-| 写法 | 转换开启 | 转换关闭（默认） |
-|---|---|---|
-| `cmd /c …` | ✗ 被改写成 `C:/` | ✓ |
-| `cmd //c …` | ✓ | ✗ **静默挂死**（cmd 打印 banner 后等 stdin） |
-| `tasklist //FI …` | ✓ | ✗ 报「无效参数」（响亮失败） |
-
-两种写法无法在一个全局 env 下共存（实测：`MSYS2_ARG_CONV_EXCL` 只支持**参数前缀**，不支持
-`program:prefix` 作用域，所以做不到「只对 docker 关转换」）。选择是：默认关闭（让 unix 风格参数直达原生程序，
-且 `cmd /c` 这种自然写法可用），对**唯一会挂死**的形态做前置拒绝：
-
-- cmd 家族 + 转义出现在开关位（第一个参数）→ `error_code: PATHCONV_ESCAPE`，附带正确写法与逃生口，**不执行**；
-- 其它程序 + 同样形态 → 结果里多一行 `warnings`（它们会自己报错，不必拦）；
-- 数据位（`cmd /c echo //c`）与 `//server/share`（UNC）不误报；
-- 逃生口：`env {"MSYS_NO_PATHCONV": ""}` 恢复转换，此时改成反向规则（`cmd /c` 会被拒绝，`cmd //c` 可用）。
-
 ### 5.12 `policy` 只回一行
 
 早期每次结果都带完整 `policy` 对象（`decision`/`tier`/`stance`/`reason`/`matched_rules[]`），
@@ -313,6 +297,41 @@ MSYS 的路径转换只对原生程序生效、对 bash 内建与 MSYS 程序无
 stdio MCP server 的进程 cwd 是「客户端恰好从哪儿拉起它」，实测就是 DSH 的安装目录——作为默认工作目录毫无意义。
 所以 `exec` 省略 `cwd` 时先问客户端要 roots（MCP 标准 `roots/list`，2s 超时、结果缓存），
 取第一个存在的 root 当默认值；客户端不实现 roots 就退回进程 cwd，行为与旧版一致。
+
+### 5.15 路径转换默认关闭，以及 `//x` 转义的迁移
+
+`MSYS_NO_PATHCONV=1`（§5.13）修掉了「`/bin/sh` 被改写成 `C:/…/usr/bin/sh`」，但 MSYS 的 `//x` 转义
+（`//c` 表示字面量 `/c`）只在转换**开启**时才有意义。实测三种写法：
+
+| 写法 | 转换开启 | 转换关闭（默认） |
+|---|---|---|
+| `cmd /c …` | ✗ 被改写成 `C:/` | ✓ |
+| `cmd //c …` | ✓ | ✗ **静默挂死**（cmd 打印 banner 后等 stdin） |
+| `tasklist //FI …` | ✓ | ✗ 报「无效参数」（响亮失败） |
+
+两种写法无法在一个全局 env 下共存（实测：`MSYS2_ARG_CONV_EXCL` 只支持**参数前缀**，不支持
+`program:prefix` 作用域，做不到「只对 docker 关转换」）。选择是：默认关闭（让 unix 风格参数直达原生程序，
+且 `cmd /c` 这种自然写法可用），对**唯一会挂死**的形态做前置拒绝：
+
+- cmd 家族 + 转义出现在开关位（第一个参数）→ `error_code: PATHCONV_ESCAPE`，附带正确写法与逃生口，**不执行**；
+- 其它程序 + 同样形态 → 结果里多一行 `warnings`（它们会自己报错，不必拦）；
+- 数据位（`cmd /c echo //c`）与 `//server/share`（UNC）不误报；
+- 逃生口：`env {"MSYS_NO_PATHCONV": ""}` 恢复转换，此时改成反向规则（`cmd /c` 会被拒绝，`cmd //c` 可用）。
+
+### 5.16 完成判定跟着 shell 走，不跟着管道走
+
+`child.on('close')` 只在**进程退出且 stdio 全部关闭**后才触发，于是「命令跑完了」被定义成了「没人再持有输出管道」。
+派生进程会拖垮这个定义（实测：`sleep 20 & echo A-DONE` 花 20130ms，`sleep 20 >/dev/null 2>&1 & echo B-DONE` 只花 126ms——
+两者做的是同一件事，唯一差别是子进程是否继承了 stdout）。真实后果：
+
+1. 启动常驻进程 / GUI（`cmd /c start "" "…Docker Desktop.exe"`）会一直等到超时，然后**被杀树连坐**；
+2. 后台作业的 `still_running` 在残留子进程活着期间永远为 true，`job_output {wait: true}` 白等。
+
+现在完成信号取**直接子进程的退出**（`child.on('exit')`），管道只额外等一个短排水窗口 `EXIT_DRAIN_MS = 250ms`
+（让最后一批缓冲字节落地），到点即 `channel.stop()`：摘掉数据监听并 `resume()`，让残留写入者继续排空而不是被我们阻塞。
+正常命令走「两条流先结束」的快路径，不额外增加延迟（实测普通 `echo` 仍 ~84ms）。
+
+代价要写清楚：shell 退出之后残留进程写出的内容不再被收集，需要它们自己重定向输出。
 
 ## 6. 分发与配置
 
@@ -342,7 +361,8 @@ DSH 也可用面板插件注册。
 `node test/test-client.mjs` 覆盖：工具握手与列举（含三个 job 工具）、`doctor` 报告、回显、**管道**、非零退出码、
 **生命期超时整树杀**（`timed_out` + `still_running: false` + `timeout_ms` + hint）、**后台作业全流程**
 （立即返回句柄 → 中途轮询到部分输出 → `wait: true` 收退出码 → `offset_bytes` 增量 → `job_list` → `job_kill`）、
-**取消 = 移交**（abort 后调用被拒，但作业仍出现在 `job_list` 并能 `job_kill`）、**路径转换**（`cmd /c` 正常、
+**取消 = 移交**（abort 后调用被拒，但作业仍出现在 `job_list` 并能 `job_kill`）、**完成判定**
+（`sleep 5 &` 立即返回且不超时、后台作业随 shell 退出即 `exited`、启动结果带 `queued_ms`）、**路径转换**（`cmd /c` 正常、
 `cmd //c` 立即返回 `PATHCONV_ESCAPE` 而不是挂死、`env` 逃生口让旧写法复活）、**超 64KB 截断 + spill 全量校验**、
 空命令报错、`policy` 一行裁决、**缺 bash 降级**（清洗 env 拉起第二个实例，断言 `BASH_NOT_FOUND` + 修复指引 + doctor 报 NOT FOUND）。
 
@@ -351,6 +371,7 @@ DSH 也可用面板插件注册。
 
 `node test/test-runner.mjs` 单测 P0 护栏与执行原语：环境洗白与 `MSYS_NO_PATHCONV` 默认/撤销、
 spill 内存与磁盘双重封顶、通道的 tail/offset 读、信号量并发峰值与 `queuedMs`、**取消即杀**（`spawnBash` 的默认语义，用延迟写入的标记文件验证树真死）、
+**完成判定跟着 shell 走**（留管道持有者的命令不再等它：A/B 两条对照耗时接近、迟到的写入者不拖时间）、
 **前台预算到点移交而非杀**、**移交/取消后时限归零**（v3 BUG-1：跨过原 `timeout_ms` 后仍在跑）、
 **取消移交而非杀**、后台作业生命周期与审计落盘、审计 JSONL 往返与轮转。
 

@@ -86,6 +86,27 @@ if (!d.bashPath) {
   rmSync(dir, { recursive: true, force: true })
 }
 
+console.log('== completion follows the shell, not the pipes ==')
+if (!d.bashPath) {
+  console.log('  skip  no bash on this machine')
+} else {
+  // v4 BUG-3: a grandchild holding stdout used to hold the whole call open
+  // (`sleep 20 &` took 20s; `cmd /c start` hit the timeout and killed the tree).
+  const t1 = Date.now()
+  const held = await spawnBash(d.bashPath, 'sleep 3 & echo A-DONE', { timeoutMs: 20000 })
+  const heldMs = Date.now() - t1
+  assert(held.exit_code === 0 && held.stdout.includes('A-DONE'), 'the shell exit code and output survive', JSON.stringify({ c: held.exit_code, o: held.stdout }))
+  assert(heldMs < 1500, 'a command that leaves a pipe holder returns without waiting for it', heldMs)
+  const t2 = Date.now()
+  const quiet = await spawnBash(d.bashPath, 'sleep 3 >/dev/null 2>&1 & echo B-DONE', { timeoutMs: 20000 })
+  const quietMs = Date.now() - t2
+  assert(Math.abs(quietMs - heldMs) < 1200, 'the redirect variant takes about the same time', JSON.stringify({ heldMs, quietMs }))
+  const t3 = Date.now()
+  const later = await spawnBash(d.bashPath, 'echo first; (sleep 2; echo late) &', { timeoutMs: 20000 })
+  assert(Date.now() - t3 < 1500 && later.stdout.includes('first'), 'a late writer does not delay the result', String(Date.now() - t3))
+  assert(!later.timed_out && later.killed_by === null, 'and it is not a timeout kill', later.killed_by)
+}
+
 console.log('== env defaults: MSYS_NO_PATHCONV ==')
 assert(buildEnv({}).MSYS_NO_PATHCONV === '1', 'path conversion is off by default')
 assert(buildEnv({ MSYS_NO_PATHCONV: '' }).MSYS_NO_PATHCONV === undefined, 'an empty env value removes the default')

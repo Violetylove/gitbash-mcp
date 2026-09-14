@@ -22,7 +22,7 @@ import {
 import { appendAudit } from './lib/audit.js'
 import { decide, describePolicy, pathconvAdvice, describePathconv } from './lib/policy.js'
 
-const VERSION = '2.4.1'
+const VERSION = '2.4.2'
 const gate = createSemaphore(MAX_CONCURRENCY)
 
 function newAuditId() {
@@ -245,6 +245,9 @@ server.registerTool(
         pid: job.pid,
         started_at: new Date(job.startedAt).toISOString(),
         timeout_ms: job.timeoutMs,
+        // Jobs are bounded by MAX_BACKGROUND_JOBS, not by the foreground gate,
+        // so they never queue; the field is here for result-shape parity.
+        queued_ms: 0,
         command: args.command,
         cwd,
         audit_id: auditId,
