@@ -1,6 +1,7 @@
 # gitbash-mcp 项目计划书
 
-> 状态：M0–M11 完成（M11 = 采纳率：服务端 `instructions` + `exec` 描述声明「Windows 优先」）；只剩发布。代码契约以 `docs/DESIGN.md` 为准，代码地图见 `docs/REPO_MAP.md`。
+> 状态：M0–M11、M14 完成（M14 = 采纳用户视角 v2 反馈：后台作业 / 超时契约 / policy 瘦身 / 解析 bug / 路径转换 / 文档）；
+> 只剩 M12 发布。代码契约以 `docs/DESIGN.md` 为准，代码地图见 `docs/REPO_MAP.md`。
 
 ## 已完成
 
@@ -18,15 +19,20 @@
 | M9 | P0 护栏 | 取消即杀 / 并发上限 / 双重封顶 / 环境洗白 / 审计日志（零配置） |
 | M10 | P1 策略引擎 | 能力分类（`shell-parse.js` 解析 + 逐段判定 + 项目声明信任，取代正则黑名单）+ 单开关 `GITBASH_MCP_RISKY` + `policy` 工具 |
 | M11 | 采纳率 | 服务端 MCP `instructions` + `exec` 描述声明「Windows 上优先用它」（`4d4b62d`） |
+| M14 | 长任务与超时契约（用户反馈 v2） | 后台作业注册表（`lib/jobs.js`）+ `job_output`/`job_list`/`job_kill`；`run_in_background` 毫秒级返回句柄；**取消/前台预算到点改为「移交」而不是杀进程**；`FOREGROUND_MS=45000` 前台软期限；`still_running`/`timeout_ms`/`job_id` 结构化结果；policy 收成一行；解析器修 shell 关键字与 `2>&1`/`/dev/null`；默认 `MSYS_NO_PATHCONV=1`；省略 `cwd` 时用客户端 roots；README 补「三个执行环境」 |
+
+> M14 的来源：两次用户视角黑盒反馈（`gitbash-mcp-agent-brief.md` / `-v2.md`）。
+> 关键结论：MCP server 是跨调用长期存活的独立进程，**后台作业与超时兜底可在 server 内独立完成，不需要宿主配合**；
+> 唯一修不了的是「让一次前台调用真的阻塞 10 分钟」（那道超时在客户端进程里），用软期限 + 移交绕过。
 
 ## 未完成
 
 ### M12：发布到 npm（只剩真发布的 OTP）
 
 1. 前置已就绪：包名 404 未被占用；`npm whoami --registry=https://registry.npmjs.org/` → `violetylov3`；
-   `npm publish --dry-run` 已跑通（13 个文件、约 29 kB）
+   `npm publish --dry-run` 已跑通
 2. `npm publish --otp=<验证器 6 位码>`（或把 granular token 配成 **All packages + Read and write + Bypass 2FA**）
-3. `npm i -g gitbash-mcp` 验证全局安装
+3. `npm i -g gitbash-mcp` 验证全局安装（2.4.0 新增三个 `job_*` 工具，客户端要重启才看得到）
 4. 把 DSH 面板的注册从仓库路径改成 `gitbash-mcp` 命令
 
 ### M13（可选）：P2 加固
@@ -41,8 +47,11 @@
 |---|---|---|
 | 找不到 bash | 工具不可用 | 服务不崩；`BASH_NOT_FOUND` + `doctor` 给修复步骤 |
 | MSYS2 子进程残留 | 超时后占资源 | `taskkill /T /F` 整树 + 1.5s 有界宽限结算 |
+| 客户端请求超时（~60s）打断长命令 | 调用方拿 `-32001`，误判「任务失败」 | 前台软期限 `FOREGROUND_MS=45s` 先返回结构化结果；更长的走后台作业；取消改为移交而不是杀（§5.10/§5.11） |
+| 取消不再断进程（按「停止」不等于停） | 命令可能继续跑 | 有意取舍：`job_list` 可见、`job_kill` 可停、server 退出全杀、后台作业上限 8 |
+| 后台作业随 server 重启丢失 | 句柄与结果取不回 | 文档明示；审计落 `job_id`/`command`/`exit_code`/`log_path`，输出文件 24h 内可从盘上捞 |
 | 策略被绕过 | 危险命令仍可能执行 | 文档明确声明「护栏不是安全边界」；人类同意开关 + 完整审计 |
-| 审计 / spill 无界增长 | 磁盘占用 | 审计 5MB 轮转；spill 单文件 64MB + 24h 清理 |
+| 审计 / spill 无界增长 | 磁盘占用 | 审计 5MB 轮转；spill 单文件 64MB + 24h 清理；作业注册表最多 32 条 |
 | 依赖漂移（SDK/zod） | 启动报错 | semver 锁定 + 每次发布前跑五套测试 |
 
 ## 变更控制

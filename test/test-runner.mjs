@@ -4,7 +4,13 @@ import { Readable } from 'node:stream'
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync, writeFileSync, mkdirSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { scrubEnv, collectStream, createSemaphore, spawnBash } from '../lib/runner.js'
+import {
+  scrubEnv, buildEnv, collectStream, createChannel, readChannelText, createSemaphore, spawnBash,
+  runWithForegroundBudget,
+} from '../lib/runner.js'
+import {
+  startJob, adopt, getJob, listJobs, jobPayload, killJob, waitForJob, runningJobCount,
+} from '../lib/jobs.js'
 import { appendAudit, readAudit, auditPath } from '../lib/audit.js'
 import { detectBash } from '../lib/detect.js'
 
@@ -18,6 +24,7 @@ function canned(buffers) {
   return new Readable({ read() { const b = queue.shift(); if (b) this.push(b); else this.push(null) } })
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const d = detectBash()
 
 console.log('== env scrubbing ==')
 const scrubbed = scrubEnv({ PATH: 'C:/x', GITBASH_BASH: 'b.exe', MY_TOKEN: 't', DEEPSEEK_API_KEY: 'k', AWS_SECRET_ACCESS_KEY: 's', SSH_AUTH_SOCK: '/tmp/s', DB_PASSWORD: 'p', USERPROFILE: 'C:/u' })
@@ -60,7 +67,6 @@ assert(gated.length === 5 && gated.every((g) => g.value === 'done'), 'all tasks 
 assert(gated.some((g) => g.queuedMs > 0), 'queued tasks report queuedMs', JSON.stringify(gated.map((g) => g.queuedMs)))
 
 console.log('== cancellation kills the process tree ==')
-const d = detectBash()
 if (!d.bashPath) {
   console.log('  skip  no bash on this machine')
 } else {
@@ -78,6 +84,75 @@ if (!d.bashPath) {
   await sleep(3200)
   assert(!existsSync(late), 'the late marker was never written (tree really died)')
   rmSync(dir, { recursive: true, force: true })
+}
+
+console.log('== env defaults: MSYS_NO_PATHCONV ==')
+assert(buildEnv({}).MSYS_NO_PATHCONV === '1', 'path conversion is off by default')
+assert(buildEnv({ MSYS_NO_PATHCONV: '' }).MSYS_NO_PATHCONV === undefined, 'an empty env value removes the default')
+const envKept = buildEnv({ GITBASH_MCP_RISKY: 'allow' })
+assert(envKept.GITBASH_MCP_RISKY === 'allow' && envKept.GIT_PAGER === 'cat' && envKept.NO_COLOR === '1', 'extra env is merged over the defaults')
+
+console.log('== channels: tail and offset reads ==')
+const ch = createChannel({ memoryCapBytes: 4 })
+const chHead = await ch.attach(canned([Buffer.from('abcdefghij')]))
+assert(chHead.text === 'abcd' && chHead.truncated === true, 'the in-memory head is capped', JSON.stringify(chHead))
+assert(readChannelText(ch, {}).text === 'abcdefghij', 'a full read comes from the spill file', readChannelText(ch, {}).text)
+assert(readChannelText(ch, { offsetBytes: 6 }).text === 'ghij', 'an offset read continues where the last poll stopped')
+assert(readChannelText(ch, { tailBytes: 3 }).text === 'hij', 'a tail read returns the newest bytes')
+const chTail = readChannelText(ch, { offsetBytes: 6 })
+assert(chTail.next_offset === 10 && chTail.bytes_total === 10, 'next_offset and bytes_total are reported', JSON.stringify(chTail))
+if (ch.spillPath) rmSync(ch.spillPath, { force: true })
+
+console.log('== foreground budget: hand off instead of kill ==')
+const jobsHome = mkdtempSync(join(tmpdir(), 'gbm-jobs-audit-'))
+process.env.LOCALAPPDATA = jobsHome
+delete process.env.XDG_STATE_HOME
+if (!d.bashPath) {
+  console.log('  skip  no bash on this machine')
+} else {
+  const hand = await runWithForegroundBudget(d.bashPath, 'echo partial; sleep 5; echo late', { timeoutMs: 120000, waitMs: 400 })
+  assert(hand.detached === true, 'a command with a long budget is handed over, not killed')
+  const adopted = adopt(hand.handle, { command: 'handoff probe', cwd: process.cwd() })
+  assert(adopted.status === 'running' && jobPayload(adopted).still_running === true, 'the adopted job is still running')
+  assert(jobPayload(adopted).stdout.includes('partial'), 'its output so far is readable', jobPayload(adopted).stdout)
+  const stopped = killJob(adopted.id)
+  await waitForJob(stopped, 6000)
+  assert(adopted.status === 'killed' && adopted.killedBy === 'kill', 'job_kill ends it explicitly', adopted.status + '/' + adopted.killedBy)
+  const short = await runWithForegroundBudget(d.bashPath, 'sleep 5', { timeoutMs: 1200, waitMs: 45000 })
+  assert(short.detached !== true && short.result.killed_by === 'timeout', 'a budget below the ceiling is still killed as a timeout', short.result && short.result.killed_by)
+
+  const ctl = new AbortController()
+  const pendingCancel = runWithForegroundBudget(d.bashPath, 'echo cancel-start; sleep 5; echo late-cancel', { timeoutMs: 30000, waitMs: 20000, signal: ctl.signal })
+  await sleep(300)
+  ctl.abort()
+  const cancelled = await pendingCancel
+  assert(cancelled.detached === true && cancelled.cancelled === true, 'a cancelled call is handed over instead of killed', JSON.stringify({ d: cancelled.detached, c: cancelled.cancelled }))
+  const cancelJob = adopt(cancelled.handle, { command: 'cancel probe', cwd: process.cwd() })
+  assert(jobPayload(cancelJob).still_running === true, 'the cancelled command is still running as a job')
+  assert(jobPayload(cancelJob).stdout.includes('cancel-start'), 'its output survived the cancellation', jobPayload(cancelJob).stdout)
+  killJob(cancelJob.id)
+  await waitForJob(cancelJob, 6000)
+  assert(cancelJob.status === 'killed', 'job_kill is how it is stopped', cancelJob.status)
+}
+
+console.log('== background jobs ==')
+if (!d.bashPath) {
+  console.log('  skip  no bash on this machine')
+} else {
+  const before = runningJobCount('background')
+  const job = startJob({ bashPath: d.bashPath, command: 'echo one; sleep 0.4; echo two', cwd: process.cwd() })
+  assert(job.status === 'running' && runningJobCount('background') === before + 1, 'a started job is running')
+  const early = jobPayload(job)
+  assert(early.still_running === true && early.exit_code === null, 'the first poll reports a running job', JSON.stringify({ status: early.status, exit_code: early.exit_code }))
+  await waitForJob(job, 8000)
+  const settled = jobPayload(job)
+  assert(settled.status === 'exited' && settled.exit_code === 0 && settled.still_running === false, 'the job finishes with its exit code', JSON.stringify({ status: settled.status, exit_code: settled.exit_code }))
+  assert(settled.stdout.includes('one') && settled.stdout.includes('two'), 'the whole output is available', settled.stdout)
+  assert(settled.stdout_bytes === Buffer.byteLength(settled.stdout), 'byte totals match the output', String(settled.stdout_bytes))
+  assert(getJob(job.id) !== null && listJobs().some((j) => j.id === job.id), 'the job is listed')
+  assert(killJob('job-does-not-exist') === null, 'an unknown job id resolves to null')
+  const audited = readAudit(20).filter((row) => row.job_id === job.id)
+  assert(audited.length >= 1, 'job activity lands in the audit log', String(audited.length))
 }
 
 console.log('== audit log ==')

@@ -37,6 +37,26 @@ assert(ansi.opaque.includes('ansi-c quoting'), 'ansi-c quoting is flagged opaque
 assert(ansi.segments[0].programHasVar === true, 'ansi-c quoting leaves the program unresolved')
 assert(decide("$'rm' -rf /").decision === 'ask-required', 'ansi-c quoting asks instead of guessing')
 
+console.log('== parser: redirections and shell keywords (v2.4.0 regressions) ==')
+const dupParse = parseCommand('git log --oneline -20 2>&1 | head -30')
+assert(dupParse.segments.length === 2, '2>&1 does not split off a phantom segment', JSON.stringify(dupParse.segments.map((s) => s.program)))
+assert(dupParse.segments[0].redirections[0].dup === '1', '2>&1 is recorded as an fd duplication', JSON.stringify(dupParse.segments[0].redirections))
+assert(dupParse.segments[0].redirections[0].isWrite === false, '2>&1 is not a file write')
+assert(dupParse.writes.length === 0, '2>&1 produces no write target', JSON.stringify(dupParse.writes))
+assert(parseCommand('npm test 2>/dev/null').segments[0].program === 'npm', 'an fd prefix is not read as a program')
+assert(parseCommand('echo hi > /dev/null').writes.length === 0, '/dev/null is not a write')
+assert(parseCommand('echo hi >out.txt').writes[0] === 'out.txt', 'a real file target is still a write')
+assert(parseCommand('cmd &> log.txt').segments[0].redirections[0].kind === 'both', '&> is an both-streams redirection')
+const kwPrograms = parseCommand('for i in a b; do echo $i; done').segments.map((s) => s.program)
+assert(!kwPrograms.includes('for') && !kwPrograms.includes('do') && !kwPrograms.includes('done'), 'shell keywords are not programs', kwPrograms.join(','))
+assert(parseCommand('{ rm -rf /; }').segments[0].program === 'rm', 'a leading brace is dropped, the command behind it is still judged')
+assert(parseCommand('echo {a,b}').segments[0].args.includes('{a,b}'), 'brace expansion inside a word survives')
+assert(parseCommand('[[ -f x ]] && echo hi').segments[0].program === '', 'a [[ ]] conditional is not a command')
+const keywordNoise = evaluateCommand('for i in 1 2 3; do echo $i; done').reasons.filter((r) => r.startsWith('not a program we vouch for'))
+assert(keywordNoise.length === 0, 'shell keywords never produce "not a program we vouch for"', keywordNoise.join(', '))
+assert(evaluateCommand('git log 2>&1 | head -3').reasons.join('; ').indexOf('writes to') === -1, 'no "writes to" entry for an empty/fd target')
+assert(evaluateCommand('for i in a b; do rm -rf /; done').tier === 'catastrophic', 'a command inside a loop is still judged')
+
 const CASES = [
   ['git status', 'read-only'],
   ['git log --oneline | head -3', 'read-only'],
@@ -81,6 +101,18 @@ const CASES = [
   ['docker run x', 'ask-required'],
   ['fakecmd --x', 'ask-required'],
   ['cd /tmp; echo hi', 'read-only'],
+  ['for i in 1 2 3; do echo $i; done', 'read-only'],
+  ['for i in a b; do rm -rf /; done', 'catastrophic'],
+  ['while read l; do echo $l; done < f', 'read-only'],
+  ['if [ -f x ]; then echo hi; fi', 'read-only'],
+  ['[[ -f docs ]] && echo hi', 'read-only'],
+  ['{ rm -rf /; }', 'catastrophic'],
+  ['git log 2>&1 | head -3', 'read-only'],
+  ['npm test 2>/dev/null', 'project'],
+  ['echo hi > /dev/null 2>&1', 'read-only'],
+  ['ls -la &> /dev/null', 'read-only'],
+  ['echo hi >> out.txt', 'ask-required'],
+  ['for f in $(ls); do echo $f; done', 'ask-required'],
 ]
 
 console.log('== capability classification (' + CASES.length + ' cases) ==')

@@ -1,9 +1,9 @@
 # gitbash-mcp
 
-MCP server，把 **git-bash (MSYS2)** 交给 AI agent 用（DSH / Claude Code / Codex / Cursor / VS Code / Claude Desktop）。
-它在 agent 的沙箱**之外**运行，所以管道、`$(...)`、子进程全部可用。
+把 **git-bash (MSYS2)** 交给 AI agent 用的 MCP server（DSH / Claude Code / Codex / Cursor / VS Code / Claude Desktop）。
+它在 agent 的沙箱**之外**运行，所以管道、`$(...)`、子进程、Docker 全部可用；长任务可以转成后台作业，不会被客户端超时打断。
 
-- 工具：`exec`、`bash_info`、`doctor`、`policy`
+- 工具：`exec`、`job_output`、`job_list`、`job_kill`、`bash_info`、`doctor`、`policy`
 - 运行时：Node >= 18（兼容 Bun）
 - 协议：MCP stdio
 
@@ -12,6 +12,19 @@ MCP server，把 **git-bash (MSYS2)** 交给 AI agent 用（DSH / Claude Code / 
 Windows 上 DSH 的沙箱用 WRITE_RESTRICTED 受限令牌跑命令。MSYS2 启动要建 signal pipe，受限令牌下直接失败
 （实测 `couldn't create signal pipe, Win32 error 5`）；捕获子进程输出也会 `EPERM`。
 **沙箱内跑 git-bash 无解**，所以这个 MCP 以独立进程活在沙箱外。
+
+## 三个执行环境（先读，能省掉大量误诊）
+
+同一个 agent 会话里通常有三个能力不同的执行环境，**同一个网络目标在不同环境里的结论可能不一致**：
+
+| 环境 | 文件沙箱 | Windows 命名管道 | 网络路径 |
+|---|---|---|---|
+| **git-bash 桥（本 server）** | 沙箱**外**，可写任意路径 | **可访问**（Docker 可用） | 走宿主网络 |
+| 宿主沙箱内的 shell（如 pwsh） | 受限（workspace-write） | **打不开** → `docker` 不可用 | 走宿主网络 |
+| Docker daemon | — | — | **有独立代理配置**（如 `http.docker.internal:3128`） |
+
+**推论（实测踩过）**：`docker manifest inspect`（客户端直连）与 `docker pull`（daemon 侧拉取）走的是两条网络路径，
+会给出**互相矛盾**的答案。用前者断言「镜像不存在 / Docker Hub 不可达」是错的——它只能证明**客户端**连不上。
 
 ## 安装
 
@@ -53,31 +66,90 @@ gitbash-mcp uninstall     # 反向移除，只删自己的条目
 
 ## 工具
 
-### `exec`
+### `exec`：跑命令
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `command` | 是 | bash 命令或多行脚本 |
-| `cwd` | | 工作目录（Windows 路径） |
-| `timeout_ms` | | 超时毫秒（默认 60000，上限 600000），超时杀整棵进程树 |
+| `cwd` | | 工作目录（Windows 路径）。省略时优先用客户端声明的 workspace root（MCP roots），否则用 server 进程的工作目录 |
+| `timeout_ms` | | **进程生命期**上限（前台默认 60000ms，后台默认不限制；上限 600000ms），到点杀整棵进程树 |
 | `login` | | `bash -lc`（读 profile） |
-| `env` | | 追加环境变量 |
+| `env` | | 追加环境变量；值为 `""` 表示**删除**该变量（如 `{"MSYS_NO_PATHCONV": ""}`） |
+| `run_in_background` | | `true` = 转后台作业，立刻返回 `job_id` |
 
-返回统一 JSON：`exit_code` `stdout` `stderr` `timed_out` `truncated` `spill_path` `duration_ms` `killed_by`
-`queued_ms` `audit_id`，以及裁决信息 `policy`。**命令失败（非零退出 / 超时 / spawn 失败）也返回这个结构，不抛工具错误。**
-完整契约见 `docs/DESIGN.md` §4。
+返回一段 JSON，常用字段：
 
-- 输出超 64KB 截断，完整内容转存 `%TEMP%\gitbash-mcp\`，`spill_path` 指向它
+| 字段 | 含义 |
+|---|---|
+| `exit_code` | 退出码；spawn 失败或被杀为 `-1`；已移交后台时为 `null` |
+| `stdout` / `stderr` | 单流最多 64KB；超出部分转存到 `spill_path` 指向的文件 |
+| `timed_out` | 前台等待没等到结束（配合 `still_running` 区分「被杀」还是「转后台」） |
+| `still_running` | `true` = 命令还活着，用 `job_id` 取回 |
+| `killed_by` | `timeout`（生命期到点）/ `kill`（`job_kill`）/ `null` |
+| `duration_ms` / `timeout_ms` / `queued_ms` | 实际耗时 / 生效的生命期 / 因并发上限排队的时间 |
+| `audit_id` | 这次调用的审计记录 id |
+| `policy` | 一行裁决：`"allow"` 或 `"allow-risky (...)"` |
+| `hint` | 超时、转后台、排队超时、缺 bash 时的下一步建议 |
+
+- **命令失败也是这个结构**（非零退出 / 超时 / spawn 失败都返回 JSON，不抛工具错误）
 - 每次调用都是新进程，状态不保留（用 `cd` 或传 `cwd`）
+- **默认设 `MSYS_NO_PATHCONV=1`**：MSYS 不会再把 `/bin/sh` 这类参数改写成 Windows 路径传给 docker、kubectl
+  等原生程序。要恢复旧行为就传 `env: {"MSYS_NO_PATHCONV": ""}`
 
-### 其他
+### 长任务：前台 45 秒封顶 + 后台作业
+
+**一次前台调用最多等 45 秒**。超过时命令**不会被杀**，而是转成后台作业继续跑，返回体带上 `job_id`：
+
+~~~jsonc
+{ "timed_out": true, "still_running": true, "job_id": "job-...", "exit_code": null, "hint": "..." }
+~~~
+
+为什么是 45 秒：MCP 客户端自己有一道请求超时（官方 SDK 默认 **60 秒**），到点它会取消请求。
+45 秒让本 server 总是先返回结构化结果，调用方不必去猜 `MCP error -32001: Request timed out` 背后到底发生了什么。
+
+要跑长任务就直接说：
+
+| 工具 | 作用 |
+|---|---|
+| `exec {run_in_background: true}` | 毫秒级返回 `job_id`；命令**不再绑定**在发起它的那次请求上 |
+| `job_output {job_id, wait?, timeout_ms?, offset_bytes?}` | 读输出：默认非阻塞，返回状态 + 每条流尾部 64KB；`wait: true` 阻塞到结束或超时；`offset_bytes` 接着上次字节偏移读增量 |
+| `job_list` | 列出本 server 起的作业、状态、退出码 |
+| `job_kill {job_id}` | 显式停止（杀整棵树） |
+
+**什么会杀进程树**：只有 `timeout_ms` 到点、`job_kill`，以及 server 退出。
+**取消一次调用不等于丢掉成果**：客户端超时和用户打断在协议上是同一个信号，无法区分，所以 server 选择
+「提升为作业继续跑」——成果可以用 `job_list` 找回，要停就显式 `job_kill`。
+
+**持久性（重要）**：作业活在 **server 进程内**，客户端重启即丢失句柄；但审计日志会记下作业的起止、退出码和
+输出文件路径（`%TEMP%\gitbash-mcp\`，保留 24 小时），结果还能从盘上捞回来。需要跨重启的可靠后台执行，请用
+`schtasks` 或系统服务。
+
+### 其他工具
 
 - `bash_info` — 报 bash 路径与 bash/git 版本
 - `doctor` — 完整环境诊断，**bash 异常先调它**
 - `policy` — 打印当前姿态与完整规则；被拦住后调它才能向用户解释清楚
 
-`exec` 的描述和 MCP `initialize` 的 `instructions` 都声明了「Windows 上优先用它」，但压不过 harness 自带的
-系统提示——模型仍可能先选自带 shell。
+## 典型用法
+
+agent 侧的调用长这样：
+
+~~~text
+# 普通命令
+exec { command: "git status --porcelain" }
+
+# 写 workspace 之外（沙箱内的 shell 做不到）
+exec { command: "cd /c/Users/me/winter-install/anaconda && ./conda.exe install -y numpy" }
+
+# 长任务：先拿句柄，再按需读（全程不受客户端超时影响）
+exec        { command: "docker pull postgres:17.9", run_in_background: true }   -> job-xxxx
+job_output  { job_id: "job-xxxx", wait: true, timeout_ms: 30000 }               # 等到结束，收退出码
+job_output  { job_id: "job-xxxx", offset_bytes: 65536 }                         # 接着上次的字节偏移读增量
+job_kill    { job_id: "job-xxxx" }                                             # 显式停止
+
+# 大输出：内存只留 64KB，全文在返回的 spill_path 指向的文件里
+exec { command: "for i in $(seq 1 20000); do echo line-$i; done" }
+~~~
 
 ## 命令策略
 
@@ -91,13 +163,14 @@ gitbash-mcp uninstall     # 反向移除，只删自己的条目
 | catastrophic | 拒绝（`POLICY_DENIED`） | 放行 + 审计 |
 
 被拦住时模型会拿到三条路：① 你自己在终端跑 ② 换更安全的写法 ③ 改配置加 `GITBASH_MCP_RISKY=allow` 并重启。
-查看当前策略：`gitbash-mcp policy`。为什么不用正则黑名单、为什么没有批准码，见 `docs/DESIGN.md` §5.8。
+放行时结果里只有**一行** `policy` 结论，完整规则清单按需查：命令行 `gitbash-mcp policy`，或让模型调 `policy` 工具。
 
 ## 护栏（零配置）
 
-- **取消即杀**：整棵进程树 `taskkill /T /F`，结果标 `killed_by: cancel`
-- **并发上限 4**：超出排队，并在结果里报 `queued_ms`
-- **输出封顶**：内存单流 64KB，spill 文件另有 64MB 上限
+- **并发上限 4**：超出排队并在结果里报 `queued_ms`；排队时间**不计入**命令的 `timeout_ms`，
+  若排队吃掉了整个前台预算，返回 `error_code: EXEC_QUEUE_TIMEOUT` 而不是让你干等
+- **后台作业上限 8**：超出返回 `error_code: TOO_MANY_JOBS`
+- **输出封顶**：内存单流 64KB，转存文件另有 64MB 上限、24 小时清理
 - **环境洗白**：清掉凭据形状变量（`*_TOKEN` / `*_API_KEY` / `AWS_*` / `*PASSWORD*`），保留 `SSH_AUTH_SOCK`
 - **审计**：每次调用一行 JSONL，`gitbash-mcp audit` 查看
 
@@ -119,18 +192,9 @@ gitbash-mcp uninstall     # 反向移除，只删自己的条目
 检测顺序：`GITBASH_BASH`（文件必须存在）→ PATH 上的 `bash` → 常见安装路径
 （Program Files、`%LOCALAPPDATA%\Programs\Git`、scoop shims、`C:\msys64`、`C:\cygwin64`）。
 
-## 开发
+## 相关文档
 
-~~~powershell
-node bin/gitbash-mcp.js     # 起 MCP server（stdio，不接终端）
-npm test                    # 五套：client / cli / menu / runner / policy
-npm pack --dry-run          # 检查发布内容（只含源码，不含 docs/ 与测试）
-~~~
-
-测试会 spawn bash.exe 并使用管道，必须在**正常 shell**里跑（不要在受限沙箱里跑）。
-
-## 文档
-
-- `docs/DESIGN.md` — 架构、工具契约、设计决策
+- `docs/DESIGN.md` — 架构与完整契约（结果字段、决策记录、被否方案）
 - `docs/REPO_MAP.md` — 代码地图：文件职责、任务→文件索引
-- `docs/PLAN.md` — 里程碑与风险
+- `docs/PLAN.md` — 里程碑与风险登记
+- `AGENTS.md` — 维护者须知：红线、常用命令、编码约定

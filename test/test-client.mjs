@@ -46,6 +46,7 @@ try {
   assert(names.includes('bash_info'), 'tools list contains bash_info', names)
   assert(names.includes('doctor'), 'tools list contains doctor', names)
   assert(names.includes('policy'), 'tools list contains policy', names)
+  assert(names.includes('job_output') && names.includes('job_list') && names.includes('job_kill'), 'tools list contains the job tools', names)
 
   console.log('== doctor ==')
   step('calling doctor')
@@ -63,6 +64,8 @@ try {
   assert(String(j1.stdout).includes('hello-mcp'), 'stdout contains hello-mcp', j1.stdout)
   assert(String(j1.stdout).includes('git version'), 'stdout contains git version', j1.stdout)
   assert(j1.timed_out === false && j1.truncated === false && j1.spill_path === null, 'default flags', j1)
+  assert(j1.still_running === false, 'a finished foreground call is not still running', j1.still_running)
+  assert(j1.policy === 'allow', 'the policy verdict is one line', JSON.stringify(j1.policy))
   assert(typeof j1.audit_id === 'string' && j1.audit_id.length > 0, 'result carries an audit_id', j1.audit_id)
   assert(j1.killed_by === null, 'a normal run is not attributed to a kill', j1.killed_by)
   assert(typeof j1.duration_ms === 'number' && j1.duration_ms >= 0, 'duration_ms reported', j1.duration_ms)
@@ -88,6 +91,51 @@ try {
   assert(j4.timed_out === true, 'timed_out === true', j4)
   assert(typeof j4.exit_code === 'number', 'exit_code is a number', j4)
   assert(j4.killed_by === 'timeout', 'timeout is attributed as killed_by timeout', j4.killed_by)
+  assert(j4.still_running === false, 'a timed-out command is not still running', j4.still_running)
+  assert(j4.timeout_ms === 1000, 'the applied timeout is reported', j4.timeout_ms)
+  assert(String(j4.hint).includes('run_in_background'), 'the timeout hint points at background jobs', j4.hint)
+
+  console.log('== exec: background job outlives the request ==')
+  step('calling exec run_in_background')
+  const bgStart = Date.now()
+  const rb = await client.callTool({ name: 'exec', arguments: { command: 'echo bg-start; sleep 2; echo bg-end; exit 5', run_in_background: true } })
+  const jb = JSON.parse(rb.content[0].text)
+  assert(Date.now() - bgStart < 2000, 'a background start returns immediately', String(Date.now() - bgStart))
+  assert(typeof jb.job_id === 'string' && jb.job_id.startsWith('job-'), 'it returns a job id', jb.job_id)
+  assert(jb.still_running === true, 'the job is running', jb.still_running)
+  assert(jb.timeout_ms === 0, 'a background job has no lifetime limit by default', jb.timeout_ms)
+  const rbgPoll = await client.callTool({ name: 'job_output', arguments: { job_id: jb.job_id } })
+  const jp0 = JSON.parse(rbgPoll.content[0].text)
+  assert(jp0.still_running === true, 'polling mid-flight reports a running job', jp0.status)
+  let partial = jp0.stdout
+  for (let i = 0; i < 20 && !String(partial).includes('bg-start'); i++) {
+    await new Promise((r) => setTimeout(r, 200))
+    partial = JSON.parse((await client.callTool({ name: 'job_output', arguments: { job_id: jb.job_id } })).content[0].text).stdout
+  }
+  assert(String(partial).includes('bg-start'), 'partial output is readable while it runs', partial)
+  const rbgWait = await client.callTool({ name: 'job_output', arguments: { job_id: jb.job_id, wait: true, timeout_ms: 20000 } })
+  const jw = JSON.parse(rbgWait.content[0].text)
+  assert(jw.still_running === false && jw.exit_code === 5, 'wait: true collects the exit code', JSON.stringify({ s: jw.status, c: jw.exit_code }))
+  assert(String(jw.stdout).includes('bg-end'), 'the finished output contains the last line', jw.stdout)
+  const rbgOff = await client.callTool({ name: 'job_output', arguments: { job_id: jb.job_id, offset_bytes: 0 } })
+  const jo = JSON.parse(rbgOff.content[0].text)
+  assert(String(jo.stdout).startsWith('bg-start'), 'an offset read returns the head again', jo.stdout)
+  assert(jo.next_offset === jo.stdout_bytes, 'next_offset tracks the byte total', JSON.stringify({ next: jo.next_offset, total: jo.stdout_bytes }))
+  const rbgList = await client.callTool({ name: 'job_list', arguments: {} })
+  const jl = JSON.parse(rbgList.content[0].text)
+  assert(Array.isArray(jl.jobs) && jl.jobs.some((j) => j.job_id === jb.job_id), 'job_list contains the job', JSON.stringify(jl).slice(0, 160))
+  const rbgUnknown = await client.callTool({ name: 'job_output', arguments: { job_id: 'job-nope' } })
+  const junk = JSON.parse(rbgUnknown.content[0].text)
+  assert(junk.error_code === 'JOB_NOT_FOUND' && rbgUnknown.isError !== true, 'an unknown job id is a structured result, not a tool error', junk.error_code)
+
+  console.log('== job_kill stops a background job explicitly ==')
+  step('starting a long job and killing it')
+  const rbgLong = await client.callTool({ name: 'exec', arguments: { command: 'sleep 300', run_in_background: true } })
+  const jk = JSON.parse(rbgLong.content[0].text)
+  const rbgKill = await client.callTool({ name: 'job_kill', arguments: { job_id: jk.job_id } })
+  const jkk = JSON.parse(rbgKill.content[0].text)
+  assert(jkk.still_running === false, 'the job is no longer running', jkk.status)
+  assert(jkk.killed_by === 'kill', 'killed_by is kill', jkk.killed_by)
 
   console.log('== exec: output spill over 64KB cap ==')
   step('calling exec spill')
@@ -121,22 +169,34 @@ try {
   }
   assert(raised, 'empty command surfaces as an error result', raised)
 
-  console.log('== cancellation: aborting a tool call kills the tree ==')
+  console.log('== cancellation: a cancelled call hands the work over instead of killing it ==')
   step('calling exec then aborting')
   const ctl = new AbortController()
   const abortStart = Date.now()
-  const pending = client.callTool({ name: 'exec', arguments: { command: 'sleep 30', timeout_ms: 60000 } }, undefined, { signal: ctl.signal })
+  const pending = client.callTool({ name: 'exec', arguments: { command: 'echo cancelled-start; sleep 30; echo never', timeout_ms: 60000 } }, undefined, { signal: ctl.signal })
   setTimeout(() => ctl.abort(), 500)
   let abortRejected = false
-  let abortElapsed = 0
   try {
     await pending
   } catch (e) {
     abortRejected = true
   }
-  abortElapsed = Date.now() - abortStart
+  const abortElapsed = Date.now() - abortStart
   assert(abortRejected, 'the aborted call rejects instead of returning', abortElapsed)
   assert(abortElapsed < 6000, 'the abort settles promptly, not after the 30s sleep', abortElapsed)
+  let handedOver = null
+  for (let i = 0; i < 25 && handedOver === null; i++) {
+    await new Promise((r) => setTimeout(r, 200))
+    const rjobs = await client.callTool({ name: 'job_list', arguments: {} })
+    const jobs = JSON.parse(rjobs.content[0].text).jobs
+    handedOver = jobs.find((j) => j.still_running === true && String(j.command).includes('sleep 30')) || null
+  }
+  assert(handedOver !== null, 'the cancelled command is still running as a job (work is recoverable)', JSON.stringify(handedOver).slice(0, 200))
+  if (handedOver !== null) {
+    const rkill = await client.callTool({ name: 'job_kill', arguments: { job_id: handedOver.job_id } })
+    const jkill = JSON.parse(rkill.content[0].text)
+    assert(jkill.still_running === false, 'job_kill is the explicit way to stop it', jkill.status)
+  }
 
   console.log('== policy tool ==')
   step('calling policy')
@@ -186,7 +246,7 @@ try {
   const rro = await c3.callTool({ name: 'exec', arguments: { command: 'git status --porcelain && echo read-only-ran' } })
   const jro = JSON.parse(rro.content[0].text)
   assert(jro.exit_code === 0, 'a read-only chain runs', jro.exit_code)
-  assert(jro.policy && jro.policy.tier === 'read-only', 'the result records the read-only tier', jro.policy)
+  assert(jro.policy === 'allow', 'the result records the allow verdict', jro.policy)
 
   console.log('== policy: project-declared entries are trusted, undeclared ones are not ==')
   const projDir = mkdtempSync(join(tmpdir(), 'gbm-proj-'))
@@ -197,7 +257,7 @@ try {
   const rproj = await c4.callTool({ name: 'exec', arguments: { command: 'npm run hello' } })
   const jproj = JSON.parse(rproj.content[0].text)
   assert(jproj.exit_code === 0, 'a declared project script runs', jproj.exit_code)
-  assert(jproj.policy && jproj.policy.tier === 'project', 'the result records the project tier', jproj.policy)
+  assert(jproj.policy === 'allow', 'the result records the allow verdict', jproj.policy)
   assert(String(jproj.stdout).includes('project-entry-ran'), 'the script really produced its output', jproj.stdout)
   const runknown = await c4.callTool({ name: 'exec', arguments: { command: 'npm run not-declared' } })
   const junknown = JSON.parse(runknown.content[0].text)
@@ -207,7 +267,8 @@ try {
   const ra = await client.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
   const ja = JSON.parse(ra.content[0].text)
   assert(ja.exit_code === 0, 'the allow-stance server ran the command', ja.exit_code)
-  assert(ja.policy && ja.policy.decision === 'allow-risky', 'the result records allow-risky', ja.policy)
+  assert(ja.policy.startsWith('allow-risky ('), 'the result records allow-risky in one line', ja.policy)
+  assert(!String(ja.policy).includes('matched_rules'), 'the per-call policy verdict is not the whole rule dump', ja.policy)
   assert(!existsSync(victim), 'the directory was really removed')
   await c4.close()
   await c3.close()
