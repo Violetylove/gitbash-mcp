@@ -19,26 +19,22 @@
 | M9 | P0 护栏 | 取消即杀 / 并发上限 / 双重封顶 / 环境洗白 / 审计日志（零配置） |
 | M10 | P1 策略引擎 | 能力分类（`shell-parse.js` 解析 + 逐段判定 + 项目声明信任，取代正则黑名单）+ 单开关 `GITBASH_MCP_RISKY` + `policy` 工具 |
 | M11 | 采纳率 | 服务端 MCP `instructions` + `exec` 描述声明「Windows 上优先用它」（`4d4b62d`） |
-| M14 | 长任务与超时契约（用户反馈 v2） | 后台作业注册表（`lib/jobs.js`）+ `job_output`/`job_list`/`job_kill`；`run_in_background` 毫秒级返回句柄；**取消/前台预算到点改为「移交」而不是杀进程**；`FOREGROUND_MS=45000` 前台软期限；`still_running`/`timeout_ms`/`job_id` 结构化结果；policy 收成一行；解析器修 shell 关键字与 `2>&1`/`/dev/null`；默认 `MSYS_NO_PATHCONV=1`；省略 `cwd` 时用客户端 roots；README 补「三个执行环境」 |
+| M14 | 长任务与超时契约（反馈 v2） | 后台作业注册表 + `job_output`/`job_list`/`job_kill`；`run_in_background` 毫秒级返回句柄；取消/预算到点改为「移交」而非杀进程；`FOREGROUND_MS=45000` 软期限；`still_running`/`timeout_ms`/`job_id`；policy 收成一行；解析器修关键字与 `2>&1`/`/dev/null`；默认 `MSYS_NO_PATHCONV=1`；`cwd` 用客户端 roots |
+| M15 | 修 v2 带来的两条回归（反馈 v3） | 移交即**清零继承的 `timeout_ms`**（默认 60s 时限曾在软返回后 15 秒销毁成果）；`cmd //c` 前置拒绝（`PATHCONV_ESCAPE` + 改法 + 逃生口），其它程序只加 `warnings` |
+| M16 | 完成判定与并发口径（反馈 v4） | **完成 = 直接子进程退出**（管道只多等 `EXIT_DRAIN_MS=250`）：`start`/`&`/daemon 的残留持有者不再拖到超时并连坐杀树（20130ms → 364ms）；并发口径写死：`MAX_CONCURRENCY` 管前台、`MAX_BACKGROUND_JOBS` 管后台，后台启动结果补 `queued_ms` |
 
-| M15 | 修 v2 的两条回归（用户反馈 v3） | **移交即清零继承的 `timeout_ms`**（默认 60s 时限曾在软返回后 15 秒把命令杀掉，而 `hint` 承诺「没被杀」）；**路径转换转义的前置拒绝**（转换关闭后 `cmd //c` 会静默挂死 → `error_code: PATHCONV_ESCAPE` + 改法 + 逃生口，其它程序只加一行 `warnings`）；实测确认 `MSYS2_ARG_CONV_EXCL` 不支持程序级作用域，故不改写用户命令 |
-| M16 | 完成判定与并发口径（用户反馈 v4） | **完成 = 直接子进程（shell）退出**，管道只多等 `EXIT_DRAIN_MS=250` 的排水窗口：`start` / `&` / daemon 的残留持有者不再把调用拖到超时并连坐杀树（`sleep 20 & echo DONE` 实测 20130ms → 364ms），后台作业的 `still_running` 因此反映「还有没有活儿」；**并发口径写死并进文档**：`MAX_CONCURRENCY=4` 只管前台，后台由 `MAX_BACKGROUND_JOBS=8` 管，后台启动返回体补上 `queued_ms`（恒 0）保持字段一致 |
-
-> M14 的来源：两次用户视角黑盒反馈（`gitbash-mcp-agent-brief.md` / `-v2.md`）。
-> 关键结论：MCP server 是跨调用长期存活的独立进程，**后台作业与超时兜底可在 server 内独立完成，不需要宿主配合**；
+> 这三轮的来源是同一个会话的四份用户视角黑盒反馈（`gitbash-mcp-agent-brief*.md`）。
+> 贯穿结论：MCP server 是跨调用长期存活的独立进程，**后台作业与超时兜底可在 server 内独立完成，不需要宿主配合**；
 > 唯一修不了的是「让一次前台调用真的阻塞 10 分钟」（那道超时在客户端进程里），用软期限 + 移交绕过。
-> M15 的来源是同一会话的第三轮回归反馈（`-v3.md`）：**移交不等于活下来**，以及**默认值变更不得以「静默挂死」呈现**。
-> M16 是第四轮（`-v4.md`）：**完成判定不能跟着管道走**，以及**同一语义的字段与口径要在所有路径上一致**。
 
 ## 未完成
 
-### M12：发布到 npm（只剩真发布的 OTP）
+### M12：发布（收尾）
 
-1. 前置已就绪：包名 404 未被占用；`npm whoami --registry=https://registry.npmjs.org/` → `violetylov3`；
-   `npm publish --dry-run` 已跑通
-2. `npm publish --otp=<验证器 6 位码>`（或把 granular token 配成 **All packages + Read and write + Bypass 2FA**）
-3. `npm i -g gitbash-mcp` 验证全局安装（2.4.0 新增三个 `job_*` 工具，客户端要重启才看得到）
-4. 把 DSH 面板的注册从仓库路径改成 `gitbash-mcp` 命令
+1. 前置已就绪：`npm whoami --registry=https://registry.npmjs.org/` → `violetylov3`，token 可发布（无需 OTP）
+2. `npm publish` → 校验 `npm view gitbash-mcp version`
+3. 本机切到发布版：`npm i -g gitbash-mcp@latest`（**客户端要重启**才加载新版本）
+4. 可选：把 DSH 面板的注册从仓库路径改成裸命令 `gitbash-mcp`
 
 ### M13（可选）：P2 加固
 

@@ -1,16 +1,12 @@
 # gitbash-mcp 设计文档
 
-> 状态：v4（Node 运行时 + 全局安装 + doctor 诊断 + 后台作业与超时契约）。决策记录见 §5、§7。
+> 状态：2.5.0（Node 运行时 + 全局安装 + 后台作业与超时契约）。决策记录见 §5、§7；被否方案见 §7。
 
 ## 1. 背景与限制（实测）
 
-DSH 的 Windows 沙箱（`@deepseek-ai/dsh-sandbox-windows-acl`）用 **WRITE_RESTRICTED 受限令牌**执行命令
-（`packages/sandbox/sandbox-windows-acl/src/token.ts`）。后果：
-
-1. 受限令牌下**新建命名管道失败**：Node `spawn` 默认 `stdio:'pipe'` → `Error: spawn EPERM`。
-2. **MSYS2 启动即需创建 signal pipe** → `couldn't create signal pipe, Win32 error 5`，进程起不来。
-
-**沙箱内跑 git-bash 无解**（与调用方式无关）；执行进程必须在沙箱外。
+DSH 的 Windows 沙箱（`@deepseek-ai/dsh-sandbox-windows-acl`）用 **WRITE_RESTRICTED 受限令牌**执行命令，后果：
+新建命名管道失败（Node `spawn` 默认 `stdio:'pipe'` → `spawn EPERM`），而 MSYS2 启动即需创建 signal pipe
+（`couldn't create signal pipe, Win32 error 5`）。**沙箱内跑 git-bash 无解**，执行进程必须在沙箱外。
 
 ## 2. 目标 / 非目标
 
@@ -107,19 +103,18 @@ PATH 上的 git、**逐条候选路径命中情况**、缺 bash 时的修复步�
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `job_output` | `job_id`；`wait?`；`timeout_ms?`（默认 30000，上限 50000）；`offset_bytes?`；`tail_bytes?`（默认/上限 65536） | 默认非阻塞：状态 + 每条流尾部 64KB。`wait: true` 阻塞到作业结束或超时。`offset_bytes` 按**stdout** 字节偏移读增量（`stderr` 始终按尾部返回），响应的 `next_offset` 就是下一次该传的值 |
-| `job_list` | — | 本 server 起的作业（后台 + 被移交的前台）与状态、退出码、字节数；`summary` 形式不返回输出正文 |
+| `job_output` | `job_id`；`wait?`；`timeout_ms?`（默认 30000，上限 50000）；`offset_bytes?`；`tail_bytes?`（默认/上限 65536） | 默认非阻塞：状态 + 每条流尾部 64KB。`wait: true` 阻塞到作业结束或超时。`offset_bytes` 按 **stdout** 字节偏移读增量（`stderr` 恒按尾部返回），响应的 `next_offset` 就是下次该传的值 |
+| `job_list` | — | 本 server 起的作业（后台 + 被移交的前台）与状态、退出码、字节数 |
 | `job_kill` | `job_id` | 杀整棵进程树（`taskkill /T /F`），`killed_by: "kill"` |
 
 `job_output` 返回体：`job_id` `status`(`running`/`exited`/`killed`/`timeout`) `still_running` `mode` `command` `cwd` `pid`
 `started_at` `ended_at` `duration_ms` `exit_code` `timed_out` `killed_by` `timeout_ms` `audit_id` `policy`
 `stdout` `stderr` `stdout_offset` `stderr_offset` `next_offset` `stdout_bytes` `stderr_bytes` `log_path` `log_truncated`。
+未知 `job_id` → `error_code: JOB_NOT_FOUND`（结构化结果，不是工具错误）。作业元数据只在 server 进程内，
+审计日志另记 `job_id` / `command` / `exit_code` / `log_path`，输出文件在 `%TEMP%\gitbash-mcp\`（24h 内可捞）。
 
-未知 `job_id` 返回 `error_code: JOB_NOT_FOUND`（结构化结果，不是工具错误）。作业元数据只活在 server 进程内（重启即丢句柄），
-但审计日志记了 `job_id` / `command` / `exit_code` / `log_path`，输出文件在 `%TEMP%\gitbash-mcp\`（24h 内可捞）。
-
-后台**启动**的返回体（`run_in_background: true`）：`job_id` `status` `still_running` `pid` `started_at` `timeout_ms`
-`queued_ms`（恒为 0：作业走作业上限，不占前台并发名额）`command` `cwd` `audit_id` `policy`，可疑写法时附 `warnings`。
+后台**启动**的返回体：`job_id` `status` `still_running` `pid` `started_at` `timeout_ms` `queued_ms`（恒 0，见 §5.7）
+`command` `cwd` `audit_id` `policy`，可疑写法时附 `warnings`。
 
 ### 4.6 CLI（`init` / `uninstall` / `doctor`）
 
@@ -134,22 +129,17 @@ PATH 上的 git、**逐条候选路径命中情况**、缺 bash 时的修复步�
 | Cursor | `~/.cursor/mcp.json` | `mcpServers` |
 | VS Code | `<cwd>/.vscode/mcp.json` | `servers` |
 
-交互：`lib/menu.js` 的原位勾选菜单（`↑/↓`/`k`/`j` 移动，`空格` 切换，`a`/`n` 全选/全不选，`1-9` 跳转，`回车` 确认，`q`/`Esc`/`Ctrl-C` 取消）；
-非 TTY 或 `--no-tui` 时回退为编号输入。
+交互：`lib/menu.js` 的原位勾选菜单（`↑/↓`/`k`/`j` 移动，`空格` 切换，`a`/`n` 全选/全不选，`1-9` 跳转，`回车` 确认，`q`/`Esc`/`Ctrl-C` 取消），
+非 TTY 或 `--no-tui` 回退编号输入；按键逻辑是纯函数 `reduceMenu`（帧内容 `menuRows`/`renderFrame`），由 `test/test-menu.mjs` 单测覆盖。
+观感：备用屏幕 + 整帧重绘 + ANSI 着色（`lib/theme.js`，尊重 `NO_COLOR`/`FORCE_COLOR`/`TERM=dumb`），支持 resize。
 
-观感：进入终端**备用屏幕**（`\x1b[?1049h`）并隐藏光标，每次按键整帧重绘（`\x1b[H` + 内容 + `\x1b[J`），
-用 `◇ ❯ ◻ ◼ ✔ ✖ │ ·` 符号体系与 ANSI 着色（经 `lib/theme.js`，尊重 `NO_COLOR`/`FORCE_COLOR`/`TERM=dumb`），
-支持窗口 resize 重绘。按键逻辑是纯函数 `reduceMenu`，帧内容由纯函数 `menuRows`/`renderFrame` 生成，均由 `test/test-menu.mjs` 单测覆盖。
+写入语义（重要）：JSON 类目标是**按键合并后整文件重写**（已有键保留但格式被规范化）；
+TOML/YAML 类是**先删除我们自己的段/块，再追加到文件末尾**。两类写入前都备份 `*.bak`，重复运行幂等。
 
-写入语义（重要）：JSON 类目标是**按键合并后整文件重写**（2 空格缩进，已有键保留但格式被规范化）；
-TOML/YAML 类是**先删除我们自己的段/块，再追加到文件末尾**。两类写入前都备份 `*.bak`，且重复运行幂等。
-
-探测：`configPath` 与 `detected` 都是实时计算的 —— 目标是**配置文件/目录存在**，或 **PATH 上存在对应可执行文件**
-（`claude`、`codex`、`cursor`、`code`）。列表按「已探测在前」稳定排序，未探测的标注 `(not detected)` 但仍可选中（用于预配置）。
-受支持客户端的**集合是固定的 6 项**：每个客户端的配置格式与位置不同，无法从文件系统推导。
-
-其他开关：`--dry-run` 只预览；`--target a,b` 精确指定；`--yes` 免交互；`--runtime auto|node|bun|name` 决定写入的运行时；`--root DIR` 覆盖配置根（测试用）。
-- `uninstall` 反向移除，只删自己的条目，保留用户已有内容。
+探测：`configPath` 与 `detected` 实时计算——目标是**配置文件/目录存在**，或 **PATH 上存在对应可执行文件**
+（`claude`、`codex`、`cursor`、`code`）。列表按「已探测在前」稳定排序，未探测的标注 `(not detected)` 但仍可选中。
+受支持客户端**固定 6 项**：格式与位置各不相同，无法从文件系统推导。
+其他开关：`--dry-run` 只预览；`--target a,b` 精确指定；`--yes` 免交互；`--runtime auto|node|bun|name`；`--root DIR` 覆盖配置根（测试用）。
 
 ## 5. 关键设计决策
 
@@ -175,10 +165,8 @@ TOML/YAML 类是**先删除我们自己的段/块，再追加到文件末尾**�
 | 前台等待预算 | `FOREGROUND_MS = 45000` | 一次 MCP 请求最多等多久。到点**不杀**，把句柄交给作业注册表 |
 | 排队上限 | `QUEUE_FLOOR_MS = 250` | 并发闸门若吃掉整个预算，干脆不启动，返回 `EXEC_QUEUE_TIMEOUT` |
 
-杀完整树后仍给 1.5s（`KILL_GRACE_MS`）有界宽限结算，不等孤儿进程占着的管道——否则 `close` 事件会被拖到孤儿自己退出。
-
-**取消不再杀进程**：MCP 的 `notifications/cancelled`（客户端请求超时和用户按停止都走这条路）被当成「移交」而不是「丢弃」，
-见 §5.10。
+杀完整树后仍给 1.5s（`KILL_GRACE_MS`）有界宽限结算，不等孤儿进程占着的管道（§5.16）。
+**取消不杀进程**：`notifications/cancelled`（客户端请求超时与用户按停止都走这条路）被当成「移交」而非「丢弃」（§5.10）。
 
 ### 5.5 输出编码与截断
 UTF-8 解码；单流内存上限 64KB，超出后完整流转存 `%TEMP%\gitbash-mcp\`，返回 `truncated` + `spill_path`。
@@ -212,131 +200,107 @@ git-bash 无法在受限令牌下运行，所以这个 MCP 天然没有沙箱。
 
 不做正则黑名单，做**能力分类**（`lib/shell-parse.js` 解析 + `lib/policy.js` 裁决，两者都是纯函数）：
 
-1. **解析** `parseCommand`：去引号与反斜杠转义、按 `&& || ; | & 换行` 切段、记录重定向目标；
-   here-doc 正文整体跳过（它是数据不是命令）；`$( )`、反引号、`$'…'`、变量当程序名、`( )` 子 shell、未闭合引号 → 标记 `opaque`。
-   **shell 关键字是语法不是程序**：`{`/`}`/`!`/`if`/`then`/`else`/`while`/`do` 只被丢掉后再判定其后的命令
-   （`{ rm -rf /; }` 仍必须是 catastrophic），`for`/`case`/`function`/`in`/`done`/`fi` 这类整段没有命令的语法直接跳过。
-   重定向按 `n>`/`n>>`/`&>`/`n>&m`/`n>&-` 识别：fd 复用与关闭不算文件写入，`/dev/null` 也不算
-   （v2 反馈里 `2>&1` 曾产出 `writes to ` + 一个假程序 `1`）。
-2. **逐段判定能力**：`read-only`（内置 ~85 个程序 + 27 个 git 只读子命令）/ `project`（项目自己声明的入口）/ `mutating` / `unknown` / `opaque` / `catastrophic`。
-3. **汇总裁决**：`catastrophic` → deny；`opaque`/`mutating`/`unknown` → ask-required；全部 read-only 或 project → allow。
+1. **解析** `parseCommand`：去引号与转义、按 `&& || ; | & 换行` 切段、记录重定向目标；here-doc 正文整体跳过（它是数据）；
+   `$( )`、反引号、`$'…'`、变量当程序名、`( )` 子 shell、未闭合引号 → 标记 `opaque`。
+   **shell 关键字是语法不是程序**：`{`/`}`/`!`/`if`/`then`/`else`/`while`/`do` 丢弃后继续判定其后的命令
+   （`{ rm -rf /; }` 仍是 catastrophic），`for`/`case`/`function`/`in`/`done`/`fi` 这类无命令的语法直接跳过；
+   重定向按 `n>`/`n>>`/`&>`/`n>&m`/`n>&-` 识别，fd 复用、关闭与 `/dev/null` 都不算文件写入。
+2. **逐段判定能力**：`read-only`（内置 ~85 个程序 + 27 个 git 只读子命令）/ `project` / `mutating` / `unknown` / `opaque` / `catastrophic`。
+3. **汇总裁决**：`catastrophic` → deny；`opaque`/`mutating`/`unknown` → ask-required；全部 read-only 或 project → allow；
+   `GITBASH_MCP_RISKY=allow` 时全部放行并标注 `allow-risky`。
 
 **项目声明的信任**（替代白名单文件）：`projectEntry(cwd)` 向上最多 6 层找 `package.json` scripts、`Makefile` 目标、
-`justfile` recipe，并只匹配 `npm run <name>` / `make <target>` / `just <recipe>` 这类形式；项目改了脚本就等于改了自己的白名单，
-不引入任何需要人维护的清单文件。
+`justfile` recipe，只匹配 `npm run <name>` / `make <target>` / `just <recipe>`；项目改脚本就等于改自己的白名单。
 
-**结构化优先于正则**：`rm -rf`/`-fr`/`--recursive` 靠提取 flag 与目标判定。早期逐行 `^rm` 匹配时，多行脚本
-`cd /tmp` 换行 `rm -rf /` 被判成 safe（`^` 少了 `/m`），这个 bug 由 `test/test-policy.mjs` 钉住；here-doc 正文也曾被当成命令
-（`cat <<EOF` + `rm -rf /` 误判 catastrophic），修好后正文直接跳过。
+**结构化优先于正则**：`rm -rf`/`-fr`/`--recursive` 靠提取 flag 与目标判定。早期逐行 `^rm` 匹配漏掉多行脚本里的
+`rm -rf /`，here-doc 正文也曾被当成命令——两个 bug 都由 `test/test-policy.mjs` 钉住。
 
-`read-only`/`project` → 放行（结果里的 `policy` 是 `"allow"`）；其余默认 `ask-required`（`APPROVAL_REQUIRED`，指引模型去问用户）/
-`deny`（`POLICY_DENIED`）；`GITBASH_MCP_RISKY=allow` 时全部放行并标注 `allow-risky`。
-
-**不实现 in-band 批准码**：模型拥有同一个 shell，它能跑任何它能提交的批准命令。唯一不可伪造的同意通道是 MCP 的启动配置。
-新增 `policy` 工具输出完整规则与当前姿态，供模型向用户解释。
+**不实现 in-band 批准码**：模型拥有同一个 shell，它能跑任何它能提交的批准命令。唯一不可伪造的同意通道是 MCP 启动配置。
 
 ### 5.9 分发：全局安装，不做 exe
 `bin: { gitbash-mcp: bin/gitbash-mcp.js }`，shebang `#!/usr/bin/env node`，用户 `npm i -g gitbash-mcp`。
-`bun build --compile` 会内嵌整个 Bun 运行时（实测 108.82MB），全局安装只需用户已有的 Node，
-安装体积约 14MB（依赖 13.85MB）。
-
-已核实 `cross-spawn/lib/parse.js`：非 `.exe/.com` 扩展名会经 `cmd.exe /d /s /c` 包装，
-因此全局 `.cmd` shim 可直接作为 MCP 客户端的 `command`。
+`bun build --compile` 会内嵌整个 Bun 运行时（实测 108.82MB），全局安装只需用户已有的 Node（约 14MB）。
+已核实 `cross-spawn/lib/parse.js`：非 `.exe/.com` 扩展名会经 `cmd.exe /d /s /c` 包装，因此全局 `.cmd` shim 可直接作为客户端的 `command`。
 
 ### 5.10 后台作业：为什么必须由 server 自己做，以及取消为什么不再杀进程
 
 MCP server 是**跨调用长期存活的独立进程**（stdio，一个会话一个进程），所以「job 注册表 + 轮询/停止接口」
 完全可以在 server 内实现，不需要客户端配合——这一点是本设计的出发点：
 
-1. **`run_in_background: true` 立即返回 `job_id`**。请求毫秒级结束，客户端那 ~60s 的请求超时根本无从触发；
-   作业的生命期**不绑定**在发起它的那次请求上（`lib/jobs.js` 的 `startJob` 不接 `signal`）。
-2. **取消 = 移交，不是丢弃**。客户端请求超时和用户按「停止」在协议上不可区分（都是 `notifications/cancelled`），
-   而「成果消失」是两种误判里更坏的一种：所以 `runWithForegroundBudget` 用 `cancelAction: 'report'`，
-   收到取消时把同一个进程句柄 `adopt()` 进注册表继续跑，调用方用 `job_list` 就能找回，要停就显式 `job_kill`。
-   代价是「按停止」不再立即断掉命令——这是刻意取舍，用 `job_kill` 换「长任务永不白跑」。
-3. **前台预算到点也移交**（§5.11）。三条路径（正常结束 / 生命期超时 / 预算或取消）都产出结构化结果，
-   调用方永远不用猜「活儿还在不在」。
-4. **移交即清零时限**。`timeout_ms` 的语义是「调用方愿意等多久」；调用方已经不等了，剩下的时间不该继续倒计时摧毁成果。
-   v2 只做了移交、保留了时限，结果默认配置下窗口只有 15 秒（45s 软期限 vs 60s 默认时限）：调用方拿到
-   「没被杀，去 job_output 取结果」的承诺，15 秒后进程被销毁、输出为空。移交现在把生命期设为 0，
-   命令跑到自然结束；唯一的停止手段是 `job_kill` / server 退出。
+1. **`run_in_background: true` 立即返回 `job_id`**：请求毫秒级结束，客户端那 ~60s 的请求超时无从触发；
+   作业生命期**不绑定**在发起它的请求上（`startJob` 不接 `signal`）。
+2. **取消 = 移交，不是丢弃**：客户端超时与用户按「停止」在协议上不可区分（都是 `notifications/cancelled`），
+   而「成果消失」是更坏的误判。所以 `runWithForegroundBudget` 用 `cancelAction: 'report'`，收到取消时把同一个进程句柄
+   `adopt()` 进注册表继续跑，`job_list` 能找回，`job_kill` 能停。代价是「按停止」不再立即断掉命令——刻意取舍。
+3. **前台预算到点也移交**（§5.11）。三条路径（正常结束 / 生命期超时 / 预算或取消）都产出结构化结果，调用方不用猜。
+4. **移交即清零时限**：`timeout_ms` 的语义是「调用方愿意等多久」，调用方已经不等了。早期保留时限时，
+   默认配置下的窗口只有 15 秒（45s 软期限 vs 60s 默认时限）——调用方收到「没被杀」的承诺，15 秒后进程被销毁、输出为空。
+   现在移交把生命期设为 0，命令跑到自然结束；停止只由 `job_kill` / server 退出触发。
 
-作业输出复用 `launch()` 的输出通道：内存留头部 64KB（前台结果要用），spill 文件留全文（作业轮询要 tail/offset）。
-作业注册表只保留最近 `MAX_RETAINED_JOBS = 32` 条已完成记录；server 退出时 `killAllJobs()`，不留孤儿 bash 树。
+作业输出复用 `launch()` 的输出通道（内存留头部、spill 留全文）；注册表只保留最近 `MAX_RETAINED_JOBS = 32` 条已完成记录；
+server 退出时 `killAllJobs()`，不留孤儿 bash 树。
 
 ### 5.11 前台预算 45s：把「客户端超时」变成非事件
 
 实测（本机 DSH + 官方 SDK 客户端）：任何超过 **~60 秒**的 `exec` 调用都会以 `MCP error -32001: Request timed out`
 告终，**`timeout_ms` 完全不生效**——那道超时属于客户端，server 改不了。
 
-因此 server 不假装能端到端尊重一个 10 分钟的 `timeout_ms`，而是自设软期限：`FOREGROUND_MS = 45000`。
-45s 留出 15s 余量（进程启动 + 结果序列化 + 传输），保证本 server 的 JSON 总是**先**到。
-调用方要更长的等待就用 `run_in_background: true` 或 `job_output {wait: true}`，两者的等待都发生在
-「已经返回过的请求」之外。
-
-软期限只约束**这次调用愿意等多久**，它不再继承成进程生命期：到点移交时 `timeout_ms` 归零（§5.10.4），
-所以「默认 60s 时限」不会在移交后 15 秒把命令杀掉。
+因此 server 不假装能端到端尊重一个 10 分钟的 `timeout_ms`，而是自设软期限：`FOREGROUND_MS = 45000`，
+留出 15s 余量（进程启动 + 结果序列化 + 传输），保证本 server 的 JSON 总是**先**到。更长的等待走
+`run_in_background: true` 或 `job_output {wait: true}`——它们的等待发生在「已经返回过的请求」之外。
+软期限只约束**这次调用等多久**，不继承成进程生命期：到点移交时 `timeout_ms` 归零（§5.10.4）。
 
 ### 5.12 `policy` 只回一行
 
-早期每次结果都带完整 `policy` 对象（`decision`/`tier`/`stance`/`reason`/`matched_rules[]`），
-长会话里几十次调用 × 二三十行 JSON = 纯上下文开销，而拦截价值为零（`allow` 时尤其）。
-现在 `exec` 只回一行字符串：`"allow"` 或 `"allow-risky (dangerous, stance=allow, see the policy tool)"`；
-明细按需走 `policy` 工具。被拦住时（`APPROVAL_REQUIRED` / `POLICY_DENIED`）仍返回完整
-`category`/`reason`/`matched_rules`，因为那条路径要能向用户解释清楚。
+早期每次结果都带完整 `policy` 对象（`decision`/`tier`/`stance`/`reason`/`matched_rules[]`），长会话里是纯上下文开销。
+现在 `exec` 只回一行：`"allow"` 或 `"allow-risky (dangerous, stance=allow, see the policy tool)"`，明细按需走 `policy` 工具；
+被拦住时仍返回完整 `category`/`reason`/`matched_rules`，因为那条路径要能向用户解释清楚。
 
 ### 5.13 默认 `MSYS_NO_PATHCONV=1`
 
-MSYS2 会把看起来像 unix 路径的**参数**改写成 Windows 路径再交给原生程序：
-`docker run --rm --entrypoint /bin/sh …` 实测变成 `exec: "C:/…/usr/bin/sh": no such file or directory`。
-MSYS 的路径转换只对原生程序生效、对 bash 内建与 MSYS 程序无效，所以默认关掉它利大于弊。
-要恢复旧行为：`env: {"MSYS_NO_PATHCONV": ""}`（空值 = 删除变量，见 §4.1）。
+MSYS2 会把看起来像 unix 路径的**参数**改写成 Windows 路径再交给原生程序：`--entrypoint /bin/sh` 实测变成
+`exec: "C:/…/usr/bin/sh": no such file or directory`。转换只对原生程序生效，所以默认关掉它利大于弊；
+恢复旧行为：`env: {"MSYS_NO_PATHCONV": ""}`（空值 = 删除变量）。附带影响见 §5.15。
 
 ### 5.14 省略 `cwd` 时用客户端的 workspace root
 
-stdio MCP server 的进程 cwd 是「客户端恰好从哪儿拉起它」，实测就是 DSH 的安装目录——作为默认工作目录毫无意义。
-所以 `exec` 省略 `cwd` 时先问客户端要 roots（MCP 标准 `roots/list`，2s 超时、结果缓存），
-取第一个存在的 root 当默认值；客户端不实现 roots 就退回进程 cwd，行为与旧版一致。
+stdio server 的进程 cwd 是「客户端恰好从哪儿拉起它」（实测就是 DSH 的安装目录），作为默认工作目录毫无意义。
+所以省略 `cwd` 时先问客户端要 roots（MCP 标准 `roots/list`，2s 超时、结果缓存），取第一个存在的 root；
+客户端不实现 roots 就退回进程 cwd，行为与旧版一致。
 
-### 5.15 路径转换默认关闭，以及 `//x` 转义的迁移
+### 5.15 `//x` 转义的迁移（默认关闭路径转换的代价）
 
-`MSYS_NO_PATHCONV=1`（§5.13）修掉了「`/bin/sh` 被改写成 `C:/…/usr/bin/sh`」，但 MSYS 的 `//x` 转义
-（`//c` 表示字面量 `/c`）只在转换**开启**时才有意义。实测三种写法：
+MSYS 的 `//x` 转义（`//c` 表示字面量 `/c`）只在转换**开启**时才有意义。实测：
 
-| 写法 | 转换开启 | 转换关闭（默认） |
+| 写法 | 转换开启（旧） | 转换关闭（默认） |
 |---|---|---|
 | `cmd /c …` | ✗ 被改写成 `C:/` | ✓ |
 | `cmd //c …` | ✓ | ✗ **静默挂死**（cmd 打印 banner 后等 stdin） |
 | `tasklist //FI …` | ✓ | ✗ 报「无效参数」（响亮失败） |
 
-两种写法无法在一个全局 env 下共存（实测：`MSYS2_ARG_CONV_EXCL` 只支持**参数前缀**，不支持
-`program:prefix` 作用域，做不到「只对 docker 关转换」）。选择是：默认关闭（让 unix 风格参数直达原生程序，
-且 `cmd /c` 这种自然写法可用），对**唯一会挂死**的形态做前置拒绝：
+两种写法在一个全局 env 下无法共存（实测 `MSYS2_ARG_CONV_EXCL` 只支持**参数前缀**，`node:/bin` 无效，
+做不到「只对 docker 关转换」）。选择默认关闭，并对**唯一会挂死**的形态前置拒绝：
 
-- cmd 家族 + 转义出现在开关位（第一个参数）→ `error_code: PATHCONV_ESCAPE`，附带正确写法与逃生口，**不执行**；
-- 其它程序 + 同样形态 → 结果里多一行 `warnings`（它们会自己报错，不必拦）；
+- cmd 家族 + 转义在开关位（第一个参数）→ `error_code: PATHCONV_ESCAPE`，附正确写法与逃生口，**不执行**；
+- 其它程序 + 同形态 → 结果里多一行 `warnings`（它们会自己报错，不必拦）；
 - 数据位（`cmd /c echo //c`）与 `//server/share`（UNC）不误报；
-- 逃生口：`env {"MSYS_NO_PATHCONV": ""}` 恢复转换，此时改成反向规则（`cmd /c` 会被拒绝，`cmd //c` 可用）。
+- 逃生口 `env {"MSYS_NO_PATHCONV": ""}` 恢复转换，此时走反向规则（`cmd /c` 被拒绝、`cmd //c` 可用）。
 
 ### 5.16 完成判定跟着 shell 走，不跟着管道走
 
-`child.on('close')` 只在**进程退出且 stdio 全部关闭**后才触发，于是「命令跑完了」被定义成了「没人再持有输出管道」。
-派生进程会拖垮这个定义（实测：`sleep 20 & echo A-DONE` 花 20130ms，`sleep 20 >/dev/null 2>&1 & echo B-DONE` 只花 126ms——
-两者做的是同一件事，唯一差别是子进程是否继承了 stdout）。真实后果：
+`close` 事件只在**进程退出且 stdio 全部关闭**后才触发，于是「命令跑完了」被定义成「没人再持有输出管道」。
+实测：`sleep 20 & echo A-DONE` 花 20130ms，`sleep 20 >/dev/null 2>&1 & echo B-DONE` 只花 126ms——两者做的是同一件事，
+唯一差别是子进程是否继承 stdout。后果是启动常驻进程 / GUI（`cmd /c start "" …`）会等到超时并**被杀树连坐**，
+后台作业的 `still_running` 也会在残留子进程活着期间永远为 true。
 
-1. 启动常驻进程 / GUI（`cmd /c start "" "…Docker Desktop.exe"`）会一直等到超时，然后**被杀树连坐**；
-2. 后台作业的 `still_running` 在残留子进程活着期间永远为 true，`job_output {wait: true}` 白等。
-
-现在完成信号取**直接子进程的退出**（`child.on('exit')`），管道只额外等一个短排水窗口 `EXIT_DRAIN_MS = 250ms`
-（让最后一批缓冲字节落地），到点即 `channel.stop()`：摘掉数据监听并 `resume()`，让残留写入者继续排空而不是被我们阻塞。
-正常命令走「两条流先结束」的快路径，不额外增加延迟（实测普通 `echo` 仍 ~84ms）。
-
-代价要写清楚：shell 退出之后残留进程写出的内容不再被收集，需要它们自己重定向输出。
+现在完成信号取**直接子进程退出**（`child.on('exit')`），管道只多等 `EXIT_DRAIN_MS = 250ms` 让缓冲字节落地，
+到点 `channel.stop()`：摘掉数据监听并 `resume()`，让残留写入者继续排空而不是被我们阻塞。
+正常命令走「两条流先结束」的快路径，不增加延迟（实测普通 `echo` 仍 ~84ms）。代价：shell 退出后残留进程写出的内容不再被收集。
 
 ## 6. 分发与配置
 
 发布：`npm pack --dry-run` 只应包含源码 —— `bin/`、`lib/`、`server.js`、`package.json`、`README.md`、`LICENSE`
-（当前 14 个文件、打包约 39KB），不含 `docs/` 与测试文件。
+（当前 14 个文件、打包约 42KB），不含 `docs/` 与测试文件。
 
 配置：`gitbash-mcp init` 交互式写入各客户端配置（见 §4.6）；也可手动把命令写成 `gitbash-mcp`、参数留空。
 DSH 也可用面板插件注册。
@@ -358,29 +322,14 @@ DSH 也可用面板插件注册。
 
 ## 8. 测试策略
 
-`node test/test-client.mjs` 覆盖：工具握手与列举（含三个 job 工具）、`doctor` 报告、回显、**管道**、非零退出码、
-**生命期超时整树杀**（`timed_out` + `still_running: false` + `timeout_ms` + hint）、**后台作业全流程**
-（立即返回句柄 → 中途轮询到部分输出 → `wait: true` 收退出码 → `offset_bytes` 增量 → `job_list` → `job_kill`）、
-**取消 = 移交**（abort 后调用被拒，但作业仍出现在 `job_list` 并能 `job_kill`）、**完成判定**
-（`sleep 5 &` 立即返回且不超时、后台作业随 shell 退出即 `exited`、启动结果带 `queued_ms`）、**路径转换**（`cmd /c` 正常、
-`cmd //c` 立即返回 `PATHCONV_ESCAPE` 而不是挂死、`env` 逃生口让旧写法复活）、**超 64KB 截断 + spill 全量校验**、
-空命令报错、`policy` 一行裁决、**缺 bash 降级**（清洗 env 拉起第二个实例，断言 `BASH_NOT_FOUND` + 修复指引 + doctor 报 NOT FOUND）。
+五套测试每套一个关注面，逐套覆盖清单见 `docs/REPO_MAP.md` §8。要点：
 
-`node test/test-cli.mjs` 覆盖 CLI：help/version/doctor、`--dry-run` 不落盘、init 写入并保留既有内容、备份生成、
-**二次 init 幂等**、uninstall 只删自己的条目、`--yes` 选择已检测客户端；全部在临时 root 中进行，不碰真实配置。
+- `test-client.mjs` 走真实 MCP 协议，钉住结果契约：超时/移交/取消、后台作业全流程、完成判定、路径转换、spill、缺 bash 降级、策略。
+- `test-runner.mjs` 单测执行原语：环境、封顶、通道 tail/offset、并发、杀树、**完成判定**、**时限归零**、作业生命周期、审计。
+- `test-policy.mjs` 单测解析与裁决（含历次反馈的回归用例）；`test-menu.mjs` 纯函数；`test-cli.mjs` 在临时 root 里跑 CLI。
 
-`node test/test-runner.mjs` 单测 P0 护栏与执行原语：环境洗白与 `MSYS_NO_PATHCONV` 默认/撤销、
-spill 内存与磁盘双重封顶、通道的 tail/offset 读、信号量并发峰值与 `queuedMs`、**取消即杀**（`spawnBash` 的默认语义，用延迟写入的标记文件验证树真死）、
-**完成判定跟着 shell 走**（留管道持有者的命令不再等它：A/B 两条对照耗时接近、迟到的写入者不拖时间）、
-**前台预算到点移交而非杀**、**移交/取消后时限归零**（v3 BUG-1：跨过原 `timeout_ms` 后仍在跑）、
-**取消移交而非杀**、后台作业生命周期与审计落盘、审计 JSONL 往返与轮转。
-
-`node test/test-policy.mjs` 覆盖策略：50+ 个档位分类用例（含 `for`/`do`/`done`/`{`/`}` 关键字、`2>&1`、`&>`、
-`>/dev/null` 等 v2 反馈的解析回归）、**路径转换转义的判定**（v3 BUG-2：cmd 硬拒绝、其它程序警告、
-数据位与 UNC 不误报、转换开启时的反向规则）、姿态裁决（unset/未知值回退 ask、allow 放行）、报告内容。
-
-> 五套测试都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行。
-> 审计写入用临时 `LOCALAPPDATA`，不会污染真实日志。
+> 五套都会 spawn bash.exe 并使用管道，必须在正常 shell 中运行；审计写入用临时 `LOCALAPPDATA`，不污染真实日志。
+> 回归修复的规矩：先加一条会失败的用例，再改代码。
 
 ## 9. 变更纪律
 
