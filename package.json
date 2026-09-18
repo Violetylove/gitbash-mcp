@@ -1,6 +1,6 @@
 {
   "name": "gitbash-mcp",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "MCP server that exposes git-bash (MSYS2) command execution to AI agents such as DSH, Claude Code and Codex.",
   "type": "module",
   "main": "server.js",

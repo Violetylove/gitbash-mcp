@@ -22,7 +22,7 @@ import {
 import { appendAudit } from './lib/audit.js'
 import { decide, describePolicy, pathconvAdvice, describePathconv } from './lib/policy.js'
 
-const VERSION = '2.5.0'
+const VERSION = '2.5.1'
 const gate = createSemaphore(MAX_CONCURRENCY)
 
 function newAuditId() {
