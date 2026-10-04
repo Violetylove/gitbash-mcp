@@ -34,7 +34,7 @@ bin/gitbash-mcp.js
 | server.js | stdio 启动与退出清理 |
 | lib/mcp/server.js | 创建与组装会话；测试可注入窗口适配器 |
 | lib/mcp/tools/approval.js | approval_list / approval_status / approval_cancel 注册 |
-| lib/approval/service.js | 审批创建、exec 内部结果等待、单次决策、中断恢复、状态、取消、审计与清理 |
+| lib/approval/service.js | 审批创建、exec 内部结果等待、单次决策、中断恢复、状态、取消、审计与清理；待审批清空后关闭窗口 |
 | lib/approval/windows.js | Windows PowerShell 启动、私有 JSONL 管道、就绪与故障处理 |
 | lib/approval/windows.ps1 | WPF 单请求详情、底部翻页与逐条选择；WinForms 为备选 |
 | lib/mcp/tools/exec.js | exec 描述、schema、MCP 适配；registerExecTool |
@@ -42,6 +42,7 @@ bin/gitbash-mcp.js
 | lib/mcp/tools/diagnostics.js | bash_info / doctor / policy 注册；registerDiagnosticTools |
 | lib/mcp/instructions.js | initialize 返回的模型指引 |
 | lib/execution/results.js | 基础执行结果与 hint |
+| lib/execution/preflight.js | 工作目录预检与 INVALID_CWD 结果；directoryFailure |
 | lib/mcp/responses.js | MCP content 格式；json / text |
 | lib/mcp/workspace.js | roots 查询、缓存与 cwd 回退；createWorkspaceResolver |
 | lib/execution/service.js | 校验、授权、预检、审批接入、前后台执行、移交、审计、退出清理；createExecutionService |
@@ -67,6 +68,7 @@ bin/gitbash-mcp.js
 | 授权接入与拒绝结果 | policy/authorization.js、execution/service.js | test-client、test-policy |
 | 审批状态、窗口与执行 | approval/*、mcp/tools/approval.js、execution/service.js | test-approval、test-client |
 | 默认工作目录 | mcp/workspace.js | test-client |
+| 工作目录预检与错误提示 | execution/preflight.js、execution/service.js | test-client、test-approval |
 | 排队、超时与移交流程 | execution/service.js、execution/runner.js | test-client、test-runner |
 | 输出封顶、环境与杀树 | execution/runner.js | test-runner |
 | 作业管理与查询 | jobs/registry.js、jobs/service.js | test-runner、test-client |
@@ -100,6 +102,6 @@ approval：待审批上限 32，结束记录最多 64（按结束先后清理）
 
 完整测试含 Bash 与子进程管道，必须在沙箱外运行。menu 和 policy 是纯函数套件，可独立运行。
 
-test/fixtures/server.mjs 用测试窗口替身运行真实 MCP 组装；approval-preview.mjs 显示真实 WPF 窗口，但执行回调为空桩，可人工检查多个请求与选择。测试文件不入发布包。
+test/fixtures/server.mjs 用测试窗口替身运行真实 MCP 组装。六套自动测试、配套夹具和 WPF 控件验证入口保留；测试文件不入发布包。历史验证结果见 PROGRESS.md。
 
 README 面向用户；DESIGN 描述设计和契约；PROGRESS 记录目标、历史进度、待办与验收标准；AGENTS 约束维护方式。

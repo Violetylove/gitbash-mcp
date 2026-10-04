@@ -33,6 +33,7 @@ CLI      → lib/cli/index.js → detect / audit / policy / menu / theme
 - `lib/mcp/tools/` 负责协议适配，不做风险判定或进程管理。
 - `lib/mcp/responses.js` 负责 MCP content 格式，`lib/execution/results.js` 只定义业务结果；业务模块不依赖 mcp 目录。
 - `execution/service.js` 返回普通对象，负责执行顺序、排队、移交和调用审计；每个服务实例拥有独立的前台并发闸门。
+- `execution/preflight.js` 校验工作目录并构造 INVALID_CWD 结果，执行服务在受理和启动前复用该检查。
 - `policy/authorization.js` 将策略裁决转换为允许或拒绝执行的结果，作为执行授权接口。
 - `policy/index.js`、`policy/shell-parse.js` 保留能力分类与解析职责；`execution/runner.js` 保留唯一进程启动原语 `launch()`。
 - `jobs/registry.js` 拥有当前进程的作业注册表，`jobs/service.js` 提供查询、等待和停止操作。
@@ -40,9 +41,9 @@ CLI      → lib/cli/index.js → detect / audit / policy / menu / theme
 ## 3. 命令执行流程
 
 1. 校验非空命令，分配审计 id，解析工作目录。
-2. 分类并裁决命令；deny 直接拒绝；ask-required 进入审批流程。
-3. 惰性探测 Bash，检查路径转换写法；无法执行时返回错误和修复指引，不创建审批。
-4. 后台请求立即启动并注册作业；前台请求通过 FIFO 并发闸门执行。
+2. 分类并裁决命令；deny 直接拒绝，ask-required 标记为需要审批。
+3. 校验工作目录、惰性探测 Bash、检查路径转换写法；无法执行时返回错误和修复指引，不创建审批。批准后及前台排队结束时重新检查工作目录。
+4. 需要审批时等待本机人类决定；授权完成后，后台请求立即启动并注册作业，前台请求通过 FIFO 并发闸门执行。
 5. 前台自然结束时返回结果；等待预算到点或请求取消时，将同一执行句柄交给作业注册表。
 
 `command` 始终作为单个 argv 传给 `bash -c` 或 `bash -lc`，不改写命令，不增加引号转义层。每次执行新建 Bash 进程，状态不跨请求保留。
@@ -80,6 +81,7 @@ CLI      → lib/cli/index.js → detect / audit / policy / menu / theme
 | `APPROVAL_CANCELLED` | 关闭窗口或显式撤销本次审批，未执行 |
 | `POLICY_DENIED` | 当前姿态拒绝执行，命令未启动 |
 | `BASH_NOT_FOUND` | 无可用 Bash 路径 |
+| `INVALID_CWD` | 工作目录不存在、不是目录或无法访问；返回 cwd 与修复提示，命令未启动 |
 | `PATHCONV_ESCAPE` | cmd 开关写法与路径转换状态不匹配 |
 | `EXEC_QUEUE_TIMEOUT` | 排队已耗尽本次等待预算，命令未启动 |
 | `TOO_MANY_JOBS` | 显式后台作业达到上限，命令未启动 |
@@ -173,6 +175,8 @@ init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code �
 
 审批不设超时。需要审批时 exec 保持原工具调用等待，不提前返回待审批句柄。批准后走原执行路径，返回执行结果并附带 approval_id；长任务仍可移交并返回 job_id。拒绝、关闭窗口、显式取消或窗口故障时，向原调用返回基础执行结果、approval_id 和对应错误，不启动命令。无需客户端轮询审批，不新增 approval_wait 或自定义通知。待审批最多 32 条，已结束审批最多保留 64 条；待审批记录不因清理而失效。
 
+各请求独立执行并向对应的 exec 返回结果，不等待其他请求完成。窗口仅管理待审批请求，最后一条处理后立即关闭，不等待已批准的命令执行结束。
+
 状态流为 pending_approval → executing → completed；拒绝、客户端显式取消、窗口关闭、窗口故障、server 退出分别进入 rejected / cancelled / failed 等终态。终态不可再次批准。审批等待不占执行并发、不计入前台等待预算或 timeout_ms。批准后才开始排队和执行计时，前台执行沿用原 MCP 请求 signal，取消时移交同一进程句柄；显式后台请求仍遵守后台作业上限。completed 表示审批执行已返回结果，结果可能包含仍在运行的 job_id；命令非零退出仍通过 result.exit_code 表达。
 
 创建时固定 command、cwd、login、timeout_ms、run_in_background 和审计 id；显式后台请求在创建审批前和批准后各检查一次作业上限。单条请求的窗口 JSON 快照按 UTF-8 字节数限制为 128 KiB，超出时返回 APPROVAL_TOO_LARGE，不创建记录。整个窗口快照上限为 4 MiB，包含 JSON 封装。已结束记录按结束先后清理。审批页不允许改写请求；执行前重新检查 Bash 与路径转换，沿用创建时的授权裁决，命令仅可启动一次。取消审批只适用于 pending_approval；已经执行时通过 job_kill 停止已取得句柄的作业。
@@ -185,7 +189,11 @@ init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code �
 
 ### 8.3 WPF 窗口与通信
 
-每个 MCP server 进程最多一个审批窗口，每次只展示一条请求的命令、执行目录和执行选项（登录 Shell、前台/后台、时限），不展示风险原因或请求列表；人类批准的就是窗口所示的全部执行参数。内容使用无输入边框的文本卡片，按实际宽度换行，默认最多两行；超过两行时提供独立的展开/收起按钮，展开后可滚动查看完整内容。切换请求恢复折叠，同一请求收到新快照时保持展开状态。底部 `<`、`>` 按钮与当前位置按整个窗口居中，Reject、Approve 按钮位于同一水平行的右侧；使用 Catppuccin Latte 浅色配色，所有按钮统一使用 5px 圆角；到达首尾时禁用对应切换按钮。主标题 Command approvals 与14px、Medium 字重副标题 gitbash-mcp 整体居中，整个顶部区域（包括标题上方留白）可拖动、双击最大化或还原，提供最小化与关闭按钮；按钮点击不触发拖动，最小化保留待审批请求，不显示左下说明。仅支持允许本次、拒绝本次，不提供批量批准。新请求不抢走当前请求；当前请求移除后展示相邻请求；无请求时窗口保持打开，关闭窗口撤销全部待审批请求并清理 WPF 子进程；MCP 服务继续接收请求。独立预览脚本关窗时清理轮询和倒计时，自然退出 Node。
+每个 MCP server 进程最多一个审批窗口，每次只展示一条请求的命令、执行目录和执行选项（登录 Shell、前台/后台、时限），不展示风险原因或请求列表；人类批准的就是窗口所示的全部执行参数。
+
+内容使用无输入边框的文本卡片，按实际宽度换行，默认最多两行；超过两行时提供独立的展开/收起按钮，展开后可滚动查看完整内容。切换请求恢复折叠，同一请求收到新快照时保持展开状态。底部 `<`、`>` 按钮与当前位置按整个窗口居中，Reject、Approve 按钮位于同一水平行的右侧；使用 Catppuccin Latte 浅色配色，所有按钮统一使用 5px 圆角；到达首尾时禁用对应切换按钮。主标题 Command approvals 与14px、Medium 字重副标题 gitbash-mcp 整体居中，整个顶部区域（包括标题上方留白）可拖动、双击最大化或还原，提供最小化与关闭按钮；按钮点击不触发拖动，最小化保留待审批请求，不显示左下说明。
+
+仅支持允许本次、拒绝本次，不提供批量批准。新请求不抢走当前请求；当前请求移除后展示相邻请求；最后一条待审批请求批准、拒绝或撤销后自动关闭窗口并清理 WPF 子进程，已批准的执行不受影响；有新请求时重新打开窗口。人类主动关闭窗口撤销全部待审批请求并清理 WPF 子进程；MCP 服务继续接收请求。窗口重建后，旧窗口的迟到决策、关闭或故障回调均失效。
 
 Node 使用固定 Windows PowerShell 路径启动随包发布的 WPF 脚本，隐藏控制台，保留可见审批窗口；脚本使用 STA 和固定 XAML。父子进程通过私有 stdin/stdout JSONL 管道传递快照与选择，命令文本只作为数据；输出严格解析和限制长度，诊断走 stderr。窗口只显示和返回选择，不能自行启动 Bash。
 
