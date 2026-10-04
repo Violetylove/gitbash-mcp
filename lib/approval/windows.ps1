@@ -58,6 +58,9 @@ public static class ApprovalInput {
                 <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#1e66f5"/>
                 <Setter TargetName="ButtonSurface" Property="BorderThickness" Value="1"/>
               </Trigger>
+              <Trigger Property="Tag" Value="NoFocusBorder">
+                <Setter TargetName="ButtonSurface" Property="BorderThickness" Value="0"/>
+              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="ButtonSurface" Property="Opacity" Value="0.4"/>
               </Trigger>
@@ -94,6 +97,7 @@ public static class ApprovalInput {
               <TextBlock x:Name="Command" FontFamily="Consolas" TextWrapping="Wrap" LineHeight="24" LineStackingStrategy="BlockLineHeight"/>
             </ScrollViewer>
             <Button x:Name="ExpandCommand" Content="Expand" Visibility="Collapsed" HorizontalAlignment="Left"
+                    Tag="NoFocusBorder" FocusVisualStyle="{x:Null}"
                     Background="Transparent" Foreground="#1e66f5" BorderThickness="0" Padding="0,8,0,0" Margin="0"/>
           </StackPanel>
         </Border>
@@ -104,6 +108,7 @@ public static class ApprovalInput {
               <TextBlock x:Name="Directory" TextWrapping="Wrap" LineHeight="24" LineStackingStrategy="BlockLineHeight"/>
             </ScrollViewer>
             <Button x:Name="ExpandDirectory" Content="Expand" Visibility="Collapsed" HorizontalAlignment="Left"
+                    Tag="NoFocusBorder" FocusVisualStyle="{x:Null}"
                     Background="Transparent" Foreground="#1e66f5" BorderThickness="0" Padding="0,8,0,0" Margin="0"/>
           </StackPanel>
         </Border>
