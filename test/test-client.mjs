@@ -15,13 +15,30 @@ const cwd = join(dirname(fileURLToPath(import.meta.url)), '..')
 const auditHome = mkdtempSync(join(tmpdir(), 'gbm-client-audit-'))
 const transport = new StdioClientTransport({
   command: process.execPath,
-  args: [join(cwd, 'server.js')],
+  args: [join(cwd, 'test', 'fixtures', 'server.mjs')],
   cwd,
   // The contract suite runs under stance=allow; policy behaviour is asserted
   // separately below with a default-stance server.
   env: { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome, GITBASH_MCP_RISKY: 'allow' },
 })
 const client = new Client({ name: 'gitbash-mcp-test', version: '1.0.0' })
+
+// The fixture never approves. Withdraw each accepted request so the original
+// exec response can finish, while exercising the same waiting protocol as UI.
+async function callAndCancelApproval(connection, args) {
+  const response = connection.callTool({ name: 'exec', arguments: args })
+  response.catch(() => {})
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const list = JSON.parse((await connection.callTool({ name: 'approval_list', arguments: {} })).content[0].text)
+    const pending = list.approvals.find(item => item.command === args.command && item.status === 'pending_approval')
+    if (pending) {
+      await connection.callTool({ name: 'approval_cancel', arguments: { approval_id: pending.approval_id } })
+      return response
+    }
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  throw new Error('The exec request did not enter approval waiting')
+}
 
 let failures = 0
 const step = (s) => console.log('  >> ' + s)
@@ -46,6 +63,9 @@ try {
   assert(names.includes('bash_info'), 'tools list contains bash_info', names)
   assert(names.includes('doctor'), 'tools list contains doctor', names)
   assert(names.includes('policy'), 'tools list contains policy', names)
+  assert(['approval_list', 'approval_status', 'approval_cancel'].every(name => names.includes(name)), 'tools list contains approval queries and cancellation', names)
+  assert(!names.includes('approval_approve'), 'no client approval tool is exposed', names)
+  assert(tools.tools.find(tool => tool.name === 'exec').description.includes('approval_status'), 'exec explains how to collect approval results')
   assert(names.includes('job_output') && names.includes('job_list') && names.includes('job_kill'), 'tools list contains the job tools', names)
 
   console.log('== doctor ==')
@@ -241,7 +261,7 @@ try {
 
   console.log('== policy: a default-stance server asks before dangerous commands ==')
   const askEnv = { LOCALAPPDATA: auditHome, XDG_STATE_HOME: auditHome }
-  const t3 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'server.js')], cwd, env: askEnv })
+  const t3 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'test', 'fixtures', 'server.mjs')], cwd, env: askEnv })
   const c3 = new Client({ name: 'gitbash-mcp-test-ask', version: '1.0.0' })
   await c3.connect(t3)
   const rpolAsk = await c3.callTool({ name: 'policy', arguments: {} })
@@ -251,12 +271,19 @@ try {
   writeFileSync(join(victim, 'keep.txt'), 'x')
   const victimPosix = victim.replace(/[\\]/g, '/')
   step('calling exec with a recursive delete')
-  const rp = await c3.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })
+  const rp = await callAndCancelApproval(c3, { command: 'rm -rf "' + victimPosix + '"' })
   const jp = JSON.parse(rp.content[0].text)
-  assert(jp.error_code === 'APPROVAL_REQUIRED', 'a dangerous command asks the user', jp.error_code)
+  assert(jp.approval_id && jp.status === 'cancelled' && jp.started === false, 'a risky exec waits and returns cancellation without starting', jp)
+  const approvalQuery = JSON.parse((await c3.callTool({ name: 'approval_status', arguments: { approval_id: jp.approval_id } })).content[0].text)
+  assert(approvalQuery.status === 'cancelled', 'approval_status retains the cancelled request')
+  const approvalList = JSON.parse((await c3.callTool({ name: 'approval_list', arguments: {} })).content[0].text)
+  assert(approvalList.approvals.some(item => item.approval_id === jp.approval_id), 'approval_list includes the request')
+  const approvalCancelled = JSON.parse((await c3.callTool({ name: 'approval_cancel', arguments: { approval_id: jp.approval_id } })).content[0].text)
+  assert(approvalCancelled.status === 'cancelled' && existsSync(victim), 'approval_cancel withdraws without executing')
+  assert(jp.error_code === 'APPROVAL_CANCELLED', 'a dangerous command returns its approval outcome', jp.error_code)
   assert(jp.category === 'dangerous', 'category is dangerous', jp.category)
   assert(Array.isArray(jp.matched_rules) && jp.matched_rules.length > 0, 'matched rules are reported', jp.matched_rules)
-  assert(String(jp.hint).includes('Blocked'), 'hint explains the block', jp.hint)
+  assert(String(jp.hint).includes('cancelled'), 'hint explains why the command did not run', jp.hint)
   assert(existsSync(victim), 'the blocked command never ran')
 
   console.log('== policy: catastrophic is denied outright ==')
@@ -268,9 +295,9 @@ try {
   console.log('== policy: opaque constructs ask instead of guessing ==')
   const opaqueProbes = ['eval "echo nope"', 'bash -c "echo nope"', "rm$x -rf /"]
   for (const probe of opaqueProbes) {
-    const ro = await c3.callTool({ name: 'exec', arguments: { command: probe } })
+    const ro = await callAndCancelApproval(c3, { command: probe })
     const jo = JSON.parse(ro.content[0].text)
-    assert(jo.error_code === 'APPROVAL_REQUIRED', 'opaque asks: ' + probe, jo.error_code)
+    assert(jo.error_code === 'APPROVAL_CANCELLED', 'opaque waits for an approval outcome: ' + probe, jo.error_code)
     assert(jo.category === 'opaque' || jo.category === 'ask-required', 'opaque is not labelled safe: ' + probe, jo.category)
   }
   assert(existsSync(victim), 'no opaque probe ran')
@@ -284,7 +311,7 @@ try {
   console.log('== policy: project-declared entries are trusted, undeclared ones are not ==')
   const projDir = mkdtempSync(join(tmpdir(), 'gbm-proj-'))
   writeFileSync(join(projDir, 'package.json'), JSON.stringify({ name: 'gbm-proj', version: '1.0.0', private: true, scripts: { hello: 'echo project-entry-ran' } }))
-  const t4 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'server.js')], cwd: projDir, env: askEnv })
+  const t4 = new StdioClientTransport({ command: process.execPath, args: [join(cwd, 'test', 'fixtures', 'server.mjs')], cwd: projDir, env: askEnv })
   const c4 = new Client({ name: 'gitbash-mcp-test-project', version: '1.0.0' })
   await c4.connect(t4)
   const rproj = await c4.callTool({ name: 'exec', arguments: { command: 'npm run hello' } })
@@ -292,9 +319,9 @@ try {
   assert(jproj.exit_code === 0, 'a declared project script runs', jproj.exit_code)
   assert(jproj.policy === 'allow', 'the result records the allow verdict', jproj.policy)
   assert(String(jproj.stdout).includes('project-entry-ran'), 'the script really produced its output', jproj.stdout)
-  const runknown = await c4.callTool({ name: 'exec', arguments: { command: 'npm run not-declared' } })
+  const runknown = await callAndCancelApproval(c4, { command: 'npm run not-declared' })
   const junknown = JSON.parse(runknown.content[0].text)
-  assert(junknown.error_code === 'APPROVAL_REQUIRED', 'an undeclared script still asks', junknown.error_code)
+  assert(junknown.error_code === 'APPROVAL_CANCELLED', 'an undeclared script still waits for approval', junknown.error_code)
 
   console.log('== policy: stance=allow runs the dangerous command ==')
   const ra = await client.callTool({ name: 'exec', arguments: { command: 'rm -rf "' + victimPosix + '"' } })

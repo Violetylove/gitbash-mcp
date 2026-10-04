@@ -1,111 +1,151 @@
 # gitbash-mcp
 
-把 **git-bash (MSYS2)** 交给 AI agent 用的 MCP server（DSH / Claude Code / Codex / Cursor / VS Code / Claude Desktop）。
-它在 agent 沙箱**之外**运行：管道、`$(...)`、子进程、Docker 全部可用；长任务可以转成后台作业。
+让 Windows 上的 AI 客户端使用 Git Bash 执行命令，支持人类审批、后台任务和执行记录。
 
-- 工具：`exec`、`job_output`、`job_list`、`job_kill`、`bash_info`、`doctor`、`policy`
-- 运行时 Node >= 18（兼容 Bun）；协议 MCP stdio；只支持全局安装
+适合 Git 操作、Shell 管道、项目构建和脚本执行。Windows 原生 cmdlet、COM 和 .NET 操作仍适合使用 PowerShell。
 
-## 部署
+## 功能
 
-~~~powershell
-npm i -g gitbash-mcp
-gitbash-mcp init          # 交互式勾选客户端；--yes 免交互，--dry-run 只预览
-gitbash-mcp uninstall     # 反向移除，只删自己的条目
-~~~
+- **执行命令**：支持单条命令和多行脚本，返回输出、退出码与错误提示。
+- **人类审批**：需要确认的命令先在本机弹窗中展示，批准后才执行。
+- **长任务管理**：任务可在后台继续运行，随时查看输出或停止。
+- **诊断与记录**：检查 Bash 环境、查看命令策略和审计记录。
 
-`init` 写入**绝对路径**（`node <...>/bin/gitbash-mcp.js`），因为 npm / bun 的 shim 目录常常不在 GUI 客户端的 PATH 上。
-写入前会备份 `*.bak`，重复运行幂等。**配置完重启对应客户端。**
+## 安装与接入
 
-| 客户端 | 写入位置 | 格式 |
-|---|---|---|
-| DSH | `$DSH_HOME/cordis.patch.yml` | YAML insert |
-| Claude Code | `~/.claude.json` | `mcpServers` |
-| Codex CLI | `~/.codex/config.toml` | `[mcp_servers.gitbash]` |
-| Claude Desktop | `%APPDATA%/Claude/claude_desktop_config.json` | `mcpServers` |
-| Cursor | `~/.cursor/mcp.json` | `mcpServers` |
-| VS Code | `<cwd>/.vscode/mcp.json` | `servers` |
+需要 Windows、Node.js 18 或更高版本，以及 Git Bash。审批窗口还需要可用的 Windows 桌面、Windows PowerShell 和 WPF。
 
-只支持全局安装，不支持 npx / bunx（多一层包装，在 Windows 上以 stdio 启动不稳定）。
-bash 找不到时服务照常启动：`exec` 返回修复指引，`doctor` 给完整诊断。
+1. 全局安装：
+
+   ```powershell
+   npm install -g gitbash-mcp
+   ```
+
+2. 选择要接入的客户端：
+
+   ```powershell
+   gitbash-mcp init
+   ```
+
+3. 重启对应客户端，检查 MCP 工具是否已加载。
+
+支持自动配置 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor 和 VS Code。VS Code 配置写入当前工作目录，运行 `init` 前请先进入项目。
+
+配置修改前会备份已有文件。也可以先预览，或指定客户端：
+
+```powershell
+gitbash-mcp init --dry-run
+gitbash-mcp init --target codex,cursor
+```
+
+仅支持全局安装，不提供 npx / bunx 启动方式。服务由 MCP 客户端启动，平时无需另开终端手动运行。
 
 ## 使用
 
-### `exec`
+接入后，可以直接向 AI 描述任务，例如：
 
-| 参数 | 说明 |
+> 使用 gitbash-mcp 查看这个项目的 Git 状态。
+>
+> 在项目目录执行构建；如果需要审批，等待我确认。
+>
+> 将这个长任务放到后台运行，稍后查看输出。
+
+以下示例是客户端调用 MCP 工具的参数，不是需要粘贴到终端的命令。
+
+### 执行命令
+
+调用 `exec`：
+
+```json
+{
+  "command": "git status --short",
+  "cwd": "C:\\projects\\demo"
+}
+```
+
+| 参数 | 用途 |
 |---|---|
-| `command` | 必填，bash 命令或多行脚本 |
-| `cwd` | 工作目录；省略时用客户端声明的 workspace root |
-| `timeout_ms` | 进程生命期：前台默认 60000，后台默认不限 |
-| `login` | `bash -lc`（读 profile） |
-| `env` | 追加环境变量；值为 `""` 表示删除该变量 |
-| `run_in_background` | `true` = 转后台作业，立刻返回 `job_id` |
+| `command` | 必填；Bash 命令或多行脚本 |
+| `cwd` | 执行目录；省略时优先使用客户端提供的工作区，否则使用服务工作目录 |
+| `run_in_background` | 设为 `true`，授权后启动后台任务并返回 `job_id` |
+| `timeout_ms` | 命令执行时限，单位毫秒；前台默认 60000，后台省略时不设时限，上限 600000 |
 
-返回 JSON，常用字段：
+还可通过 `env` 设置本次命令的环境变量，通过 `login: true` 加载 Bash 登录配置。
 
-| 字段 | 含义 |
+结果主要看 `exit_code`、`stdout` 和 `stderr`；出现 `job_id` 时，用作业工具继续获取结果。命令失败会返回原因和可用提示。
+
+每次调用都是独立的 Shell，上一条命令的 `cd` 不会影响下一次调用。需要固定目录时请传 `cwd`。
+
+### 人类审批
+
+默认模式下，只读命令和识别到的项目声明入口可以直接执行；其他需要确认的命令会打开审批窗口，严重破坏性命令会被拒绝。
+
+窗口展示命令和执行目录，长内容可以展开；多个请求通过 `<`、`>` 切换。
+
+| 操作 | 结果 |
 |---|---|
-| `exit_code` | 退出码；被杀为 `-1`；已移交后台为 `null` |
-| `stdout` / `stderr` | 单流最多 64KB，超出部分转存到 `spill_path` |
-| `timed_out` / `still_running` | 前台是否没等到结束 / 命令是否还活着（还活着就用 `job_id` 取回） |
-| `killed_by` | `timeout`（生命期到点）/ `kill`（`job_kill`）/ `null` |
-| `duration_ms` / `queued_ms` | 实际耗时 / 因并发上限排队的时间 |
-| `audit_id` / `policy` / `hint` | 审计 id / 一行裁决 / 下一步建议 |
+| **Approve** | 批准本次原始命令，执行后向原 `exec` 调用返回结果 |
+| **Reject** | 拒绝本次请求，命令不执行 |
+| **关闭窗口** | 取消全部待审批请求；已经批准的执行不受影响 |
+| **最小化** | 保留待审批请求，稍后可以继续处理 |
 
-命令失败（非零退出、超时、spawn 失败）同样是这个结构，不抛工具错误。每次调用都是新进程，状态不保留。
+审批不设超时，也不计入命令执行时限。正常流程中，`exec` 等待人类决定，客户端不需要轮询审批。
 
-路径转换默认关闭，所以写 `cmd /c …` 而不是 `cmd //c …`（后者会挂住，工具会直接拒绝并提示）；
-需要旧行为时单次传 `env: {"MSYS_NO_PATHCONV": ""}`。
+如果客户端先中断或超时，已受理的审批仍会保留。不要重复提交命令：用 `approval_list` 找回请求，再通过 `approval_status {approval_id}` 查看结果；需要撤销时使用 `approval_cancel {approval_id}`。客户端断开或服务重启后，记录不再保留。
 
-### 长任务与后台作业
+风险模式由客户端的 MCP 启动环境变量 `GITBASH_MCP_RISKY` 控制：`ask` 为默认审批模式；`allow` 跳过风险审批并放行命令。修改后需重启服务；在单次 `exec` 的 `env` 中设置它不会改变审批模式。
 
-前台调用最多等 45 秒；超过时命令**不会被杀**，而是转成后台作业继续跑并返回 `job_id`：
+### 后台任务
 
-| 工具 | 作用 |
+耗时较长的命令建议直接使用后台模式：
+
+```json
+{
+  "command": "npm run build",
+  "cwd": "C:\\projects\\demo",
+  "run_in_background": true
+}
+```
+
+取得 `job_id` 后：
+
+| 工具 | 用途 |
 |---|---|
-| `exec {run_in_background: true}` | 毫秒级返回 `job_id`，命令不绑定在发起它的请求上 |
-| `job_output {job_id, wait?, timeout_ms?, offset_bytes?}` | 默认返回状态 + 每条流尾部 64KB；`wait: true` 阻塞到结束；`offset_bytes` 读增量 |
-| `job_list` | 列出作业、状态、退出码 |
-| `job_kill {job_id}` | 显式停止（杀整棵树） |
+| `job_output {job_id}` | 查看状态与输出；加 `wait: true` 可等待一段时间 |
+| `job_list` | 找回当前服务中的任务 |
+| `job_kill {job_id}` | 停止任务及其子进程 |
 
-典型流程：
+前台执行最多等待 45 秒，审批时间另计。到点或调用取消时，仍在执行的命令会移交为后台作业；需要停止时使用 `job_kill`。命令自己的执行时限到点则会停止执行。
 
-~~~text
-exec        { command: "docker pull postgres:17.9", run_in_background: true }   -> job-xxxx
-job_output  { job_id: "job-xxxx", wait: true, timeout_ms: 30000 }               # 等到结束，收退出码
-job_output  { job_id: "job-xxxx", offset_bytes: 65536 }                         # 接着上次的字节偏移读增量
-job_kill    { job_id: "job-xxxx" }                                             # 显式停止
-~~~
+后台任务不跨服务重启保留；客户端断开或服务退出时会清理运行中的任务。
 
-作业活在 server 进程内：重启客户端会丢句柄，但审计日志记了作业的起止、退出码与输出文件路径，结果还能从盘上捞回。
-需要跨重启的可靠后台执行，请用 `schtasks` 或系统服务。
+## 诊断与维护
 
-### 其他工具
+在终端中运行：
 
-- `bash_info` — bash 路径与 bash/git 版本
-- `doctor` — 完整环境诊断；bash 行为异常先调它
-- `policy` — 当前姿态与完整规则；被拦住后调它才能向用户解释清楚
+```powershell
+gitbash-mcp doctor    # 检查运行环境
+gitbash-mcp policy    # 查看当前命令策略
+gitbash-mcp audit     # 查看执行与审批记录
+```
 
-### 命令策略
+AI 也可以调用 `doctor`、`policy` 和 `bash_info` 获取诊断信息。
 
-不是黑名单，是**能力分类**：命令逐段判定，只有每段都可读、或由项目自己声明、且没有不可判读构造时才自动放行。
-唯一开关 `GITBASH_MCP_RISKY` 写在 MCP 客户端配置里（模型改不了，改完要重启服务器）。
+找不到 Bash 时，运行 `doctor`，按提示安装 Git for Windows 或修正路径，再重新连接客户端。调用失败或超时后，先检查已有审批和作业，避免重复执行。
 
-| 判定 | 默认 `ask` | `allow` |
-|---|---|---|
-| read-only / project | 放行 | 放行 |
-| mutating / unknown / opaque | 拦住，让你决定 | 放行 + 审计 |
-| catastrophic | 拒绝 | 放行 + 审计 |
+移除客户端配置及全局安装：
 
-被拦住时模型会拿到三条路：① 你自己在终端跑 ② 换更安全的写法 ③ 配置 `GITBASH_MCP_RISKY=allow` 并重启。
+```powershell
+gitbash-mcp uninstall
+npm uninstall -g gitbash-mcp
+```
 
-> 本进程在沙箱外运行，权限 = 启动它的 agent 进程的完整用户权限，没有文件沙箱。
-> 命令策略、并发上限、输出封顶、审计日志都是「降低误伤」的护栏，**不是安全边界**。
+## 权限与边界
 
-## 相关文档
+本服务在 agent 沙箱外运行，具有启动它的 agent 进程的完整用户权限，**没有文件沙箱**。命令分类、审批和审计用于减少误操作，不构成安全隔离；项目声明的脚本也不代表已经逐条验证安全。
 
-- `docs/DESIGN.md` — 完整契约、决策记录与被否方案
-- `docs/REPO_MAP.md` — 代码地图
-- `docs/PLAN.md` — 里程碑与风险登记
-- `AGENTS.md` — 维护者须知
+## 更多文档
+
+[设计说明](docs/DESIGN.md) · [目标与进度](docs/PROGRESS.md) · [维护者指南](AGENTS.md)
+
+MIT License。

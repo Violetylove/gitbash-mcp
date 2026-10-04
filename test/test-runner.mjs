@@ -7,12 +7,15 @@ import { join, dirname } from 'node:path'
 import {
   scrubEnv, buildEnv, collectStream, createChannel, readChannelText, createSemaphore, spawnBash,
   runWithForegroundBudget,
-} from '../lib/runner.js'
+} from '../lib/execution/runner.js'
 import {
   startJob, adopt, getJob, listJobs, jobPayload, killJob, waitForJob, runningJobCount,
-} from '../lib/jobs.js'
-import { appendAudit, readAudit, auditPath } from '../lib/audit.js'
-import { detectBash } from '../lib/detect.js'
+} from '../lib/jobs/registry.js'
+import { appendAudit, readAudit, auditPath } from '../lib/audit/index.js'
+import { detectBash } from '../lib/environment/detect.js'
+import { createExecutionService } from '../lib/execution/service.js'
+import { createWorkspaceResolver } from '../lib/mcp/workspace.js'
+import { pathToFileURL } from 'node:url'
 
 let failures = 0
 function assert(cond, label, detail) {
@@ -25,6 +28,18 @@ function canned(buffers) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const d = detectBash()
+
+console.log('== workspace resolver: roots, cache and fallback ==')
+let rootCalls = 0
+const resolveWorkspace = createWorkspaceResolver(async () => {
+  rootCalls++
+  return { roots: [{ uri: 'https://invalid.example/workspace' }, { uri: pathToFileURL(process.cwd()).href }] }
+})
+const resolvedRoots = await Promise.all([resolveWorkspace(), resolveWorkspace()])
+assert(resolvedRoots.every((root) => root === process.cwd()), 'valid file roots are selected after unusable entries')
+assert(rootCalls === 1, 'concurrent workspace lookups share the cached request', rootCalls)
+const fallbackWorkspace = createWorkspaceResolver(async () => { throw new Error('roots unsupported') })
+assert(await fallbackWorkspace() === process.cwd(), 'unsupported roots fall back to the server cwd')
 
 console.log('== env scrubbing ==')
 const scrubbed = scrubEnv({ PATH: 'C:/x', GITBASH_BASH: 'b.exe', MY_TOKEN: 't', DEEPSEEK_API_KEY: 'k', AWS_SECRET_ACCESS_KEY: 's', SSH_AUTH_SOCK: '/tmp/s', DB_PASSWORD: 'p', USERPROFILE: 'C:/u' })
@@ -166,6 +181,27 @@ if (!d.bashPath) {
   killJob(cancelJob.id)
   await waitForJob(cancelJob, 6000)
   assert(cancelJob.status === 'killed', 'job_kill is how it is stopped', cancelJob.status)
+
+  // Exercise orchestration directly: MCP drops the response to a cancelled
+  // request, so protocol tests alone cannot see its timed_out flag or hint.
+  const execute = createExecutionService({ defaultCwd: async () => process.cwd() })
+  const serviceCtl = new AbortController()
+  const servicePending = execute({ command: 'sleep 5', timeout_ms: 30000 }, { signal: serviceCtl.signal })
+  await sleep(300)
+  serviceCtl.abort()
+  const serviceCancelled = await servicePending
+  const serviceJob = getJob(serviceCancelled.job_id)
+  try {
+    assert(serviceCancelled.still_running === true && serviceJob !== null, 'execution service returns a recoverable job on cancellation')
+    assert(serviceCancelled.timed_out === false, 'request cancellation is not reported as foreground budget expiry', serviceCancelled.timed_out)
+    assert(serviceCancelled.hint.includes('request was cancelled'), 'the execution hint identifies cancellation', serviceCancelled.hint)
+    assert(serviceCancelled.timeout_ms === 0 && serviceCancelled.killed_by === null, 'service handoff clears the lifetime without killing the process')
+  } finally {
+    if (serviceJob) {
+      killJob(serviceJob.id)
+      await waitForJob(serviceJob, 6000)
+    }
+  }
 }
 
 console.log('== background jobs ==')

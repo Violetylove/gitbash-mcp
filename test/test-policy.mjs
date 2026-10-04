@@ -3,8 +3,8 @@
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseCommand } from '../lib/shell-parse.js'
-import { evaluateCommand, decide, currentStance, describePolicy, pathconvAdvice, describePathconv, lists } from '../lib/policy.js'
+import { parseCommand } from '../lib/policy/shell-parse.js'
+import { evaluateCommand, decide, currentStance, describePolicy, pathconvAdvice, describePathconv, lists } from '../lib/policy/index.js'
 
 // Stay hermetic: an allow-stance parent (e.g. this suite launched through the
 // gitbash MCP with GITBASH_MCP_RISKY=allow) would otherwise flip every
@@ -167,6 +167,7 @@ delete process.env.GITBASH_MCP_RISKY
 
 console.log('== report ==')
 const report = describePolicy()
+assert(report.includes('approval_status') && report.includes('keep exec waiting') && report.includes('without an approval timeout'), 'report explains exec waiting and recovery after interruption')
 assert(report.includes('capability classification'), 'report names the model')
 assert(report.includes('read-only programs'), 'report lists the read-only programs')
 assert(report.includes('project entry points'), 'report explains project trust')

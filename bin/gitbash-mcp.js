@@ -5,7 +5,7 @@
 const cliCommands = new Set(['init', 'uninstall', 'doctor', 'audit', 'policy', 'help', '--help', '-h', '--version', '-v'])
 const cmd = process.argv[2]
 if (cmd !== undefined && cliCommands.has(cmd)) {
-  await import('../lib/cli.js')
+  await import('../lib/cli/index.js')
 } else {
   await import('../server.js')
 }
