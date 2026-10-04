@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createApprovalService, MAX_PENDING_APPROVALS, MAX_FINISHED_APPROVALS } from '../lib/approval/service.js'
+import { createApprovalService, MAX_PENDING_APPROVALS, MAX_FINISHED_APPROVALS, MAX_APPROVAL_BYTES } from '../lib/approval/service.js'
 import { createExecutionService } from '../lib/execution/service.js'
 import { detectBash } from '../lib/environment/detect.js'
 
@@ -33,8 +33,9 @@ console.log('== approval queue, immutable request and one-time decisions ==')
 const first = harness()
 let executions = 0
 let executedArgs
-const env = { EXAMPLE: 'original' }
-const a = first.submit({ command: 'echo one', env }, async args => { executions++; executedArgs = args; return { exit_code: 0, stdout: 'one' } })
+const original = { command: 'echo one', login: true, timeout_ms: 30000 }
+const a = first.service.request({ args: original, verdict, policy: 'ask-required', auditId: 'test-audit',
+  execute: async args => { executions++; executedArgs = args; return { exit_code: 0, stdout: 'one' } } })
 const b = first.submit({ command: 'echo two' })
 assert.equal(a.status, 'pending_approval')
 assert.equal(a.started, false)
@@ -42,14 +43,17 @@ assert.equal(a.error_code, 'APPROVAL_REQUIRED')
 assert.equal(first.opens, 1)
 assert.equal(first.views.at(-1).length, 2)
 assert.equal(executions, 0)
-env.EXAMPLE = 'changed'
+// The window shows every execution parameter the human approves.
+assert.deepEqual(first.views.at(-1)[0].parameters, { login: true, timeout_ms: 30000, run_in_background: false })
+assert(!('env' in first.views.at(-1)[0].parameters))
+original.command = 'echo changed'
 first.events.onDecision(a.approval_id, 'approve')
 first.events.onDecision(a.approval_id, 'approve')
 first.events.onDecision(a.approval_id, 'reject')
 await flush()
 assert.equal(executions, 1)
-assert.equal(executedArgs.env.EXAMPLE, 'original')
-assert(Object.isFrozen(executedArgs) && Object.isFrozen(executedArgs.env))
+assert.equal(executedArgs.command, 'echo one')
+assert(Object.isFrozen(executedArgs))
 assert.equal(first.service.status(a.approval_id).result.stdout, 'one')
 assert.equal(first.views.at(-1).length, 1)
 assert(first.audits.some(row => row.phase === 'approved' && row.approval_id === a.approval_id))
@@ -102,6 +106,15 @@ assert.equal(independent.service.list().pending, MAX_PENDING_APPROVALS)
 const alreadyAborted = independent.service.request({ args: { command: 'probe' }, verdict, auditId: 'aborted', signal: ctl.signal })
 assert.equal(alreadyAborted.error_code, 'APPROVAL_CANCELLED')
 independent.service.close()
+// One oversized command is refused alone; the other pending requests stay.
+const sized = harness()
+const small = sized.submit()
+const huge = sized.submit({ command: 'echo ' + 'x'.repeat(MAX_APPROVAL_BYTES) })
+assert.equal(huge.error_code, 'APPROVAL_TOO_LARGE')
+assert(!huge.approval_id)
+assert.equal(sized.service.status(small.approval_id).status, 'pending_approval')
+assert.equal(sized.service.list().approvals.length, 1)
+sized.service.close()
 const retained = harness()
 const keep = retained.submit()
 for (let i = 0; i < MAX_FINISHED_APPROVALS + 4; i++) {
@@ -110,6 +123,10 @@ for (let i = 0; i < MAX_FINISHED_APPROVALS + 4; i++) {
 }
 assert.equal(retained.service.list().approvals.length, MAX_FINISHED_APPROVALS + 1)
 assert.equal(retained.service.status(keep.approval_id).status, 'pending_approval')
+// Pruning follows end order: the oldest request, finished last, is kept.
+retained.service.cancel(keep.approval_id)
+retained.service.cancel(retained.submit().approval_id)
+assert.equal(retained.service.status(keep.approval_id).status, 'cancelled')
 retained.service.close()
 
 console.log('== exec result waiting, terminal outcomes and interrupted recovery ==')

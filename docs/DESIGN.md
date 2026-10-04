@@ -59,8 +59,9 @@ CLI      → lib/cli/index.js → detect / audit / policy / menu / theme
 | `cwd` | 可选 Windows 工作目录 |
 | `timeout_ms` | 可选整数，1000–600000；前台默认 60000，后台省略时无限 |
 | `login` | 可选布尔值；true 使用 `bash -lc` |
-| `env` | 可选字符串映射；覆盖执行环境，空字符串删除变量 |
 | `run_in_background` | 可选布尔值；true 在授权完成后立即返回作业句柄 |
+
+不提供 `env` 参数：策略只判读命令文本，独立的环境映射能让只读程序执行任意代码（`GIT_PAGER`、`GIT_CONFIG_*`、`BASH_ENV`）。环境变量写在命令里，由策略判读。
 
 前台结果字段：`exit_code`、`stdout`、`stderr`、`timed_out`、`still_running`、`truncated`、`spill_path`、`spill_bytes`、`spill_truncated`、`duration_ms`、`killed_by`、`timeout_ms`、`queued_ms`、`audit_id`、`policy`。按路径附加 `hint`、`warnings`、`error_code`、`job_id`、`pid` 或拒绝原因。
 
@@ -83,6 +84,9 @@ CLI      → lib/cli/index.js → detect / audit / policy / menu / theme
 | `EXEC_QUEUE_TIMEOUT` | 排队已耗尽本次等待预算，命令未启动 |
 | `TOO_MANY_JOBS` | 显式后台作业达到上限，命令未启动 |
 | `TOO_MANY_APPROVALS` | 待审批请求达到上限，命令未启动 |
+| `APPROVAL_TOO_LARGE` | 单条请求的 JSON 快照超过 128 KiB（UTF-8 字节数），未创建审批 |
+| `APPROVAL_EXECUTION_FAILED` | 批准后执行流程抛错，命令可能未启动 |
+| `SERVER_CLOSED` | server 会话已结束，命令未启动 |
 | `APPROVAL_UI_UNAVAILABLE` | 窗口无法启动或故障，命令未启动 |
 
 ### 4.2 作业工具
@@ -133,19 +137,19 @@ server 的 initialize `instructions` 和 `exec` 描述说明：在 Windows 上�
 
 ### 6.1 环境与检测
 
-继承环境先清除凭据形状变量，保留 `SSH_AUTH_SOCK`；默认注入 `GIT_PAGER=cat`、`NO_COLOR=1`、`MSYS_NO_PATHCONV=1`。请求的 `env` 随后覆盖，不再次洗白。
+继承环境先清除凭据形状变量，保留 `SSH_AUTH_SOCK`；默认注入 `GIT_PAGER=cat`、`NO_COLOR=1`、`MSYS_NO_PATHCONV=1`。
 
 Bash 按 `GITBASH_BASH` 指定路径、PATH、常见 Git/MSYS2/Cygwin 安装位置依次寻找现存文件。指定路径无效时诊断标明无效，仍可回退到其他候选。探测惰性执行并缓存；doctor 强制刷新；服务启动不依赖 Bash 存在。
 
-路径转换默认关闭。`cmd /c` 使用正常开关；关闭转换时 cmd 首参数为 `//c` 等转义开关会前置拒绝，其它程序的同类写法返回警告；数据参数和 UNC 路径不误报。请求以 `env: {"MSYS_NO_PATHCONV": ""}` 恢复转换时，按相反的转换规则检查。
+路径转换默认关闭。`cmd /c` 使用正常开关；关闭转换时 cmd 首参数为 `//c` 等转义开关会前置拒绝，其它程序的同类写法返回警告；数据参数和 UNC 路径不误报。MSYS 只看变量是否存在，空值不能恢复转换：`env -u MSYS_NO_PATHCONV prog` 为单个程序恢复，`unset MSYS_NO_PATHCONV` 为本行其后命令恢复，再赋值则重新关闭；检查按每段的转换状态进行。
 
 ### 6.2 当前策略
 
-解析器按命令结构分段，识别引号、shell 关键字、重定向与 here-doc。fd 复用、关闭和 `/dev/null` 不视为文件写入。命令替换、动态程序名、子 shell 等不可可靠判断的结构归为 opaque。
+解析器按命令结构分段，识别引号、shell 关键字、重定向与 here-doc。fd 复用、关闭和 `/dev/null` 不视为文件写入。命令替换、动态程序名、子 shell 等不可可靠判断的结构归为 opaque。改变环境的写法同样归为 opaque：`VAR=x prog`、单独赋值（可能改写已导出变量）、带操作数的 `export`、`env VAR=x` / `env -S`、`declare -x` 及带值的 declare、`set -a`、`read` 大写变量、`printf -v`。`MSYS_NO_PATHCONV` 只影响参数改写，豁免；`env -u` 只删变量，不算。opaque 不压低更严重的裁决（`X=1 rm -rf /` 仍为 catastrophic）。
 
 策略分类为 read-only、project、ask-required、dangerous、catastrophic。项目入口依据向上最多 6 层的 package.json scripts、Makefile targets、justfile recipes 识别；这是对项目声明的信任，不代表对其内部脚本逐条证明安全。
 
-`GITBASH_MCP_RISKY` 是当前风险姿态开关，由客户端启动配置提供：默认 ask 自动放行只读和项目入口，其他命令要求人类决定，catastrophic 拒绝；allow 放行并标注风险裁决。执行请求的 env 不改变服务自身的姿态。
+`GITBASH_MCP_RISKY` 是当前风险姿态开关，由客户端启动配置提供：默认 ask 自动放行只读和项目入口，其他命令要求人类决定，catastrophic 拒绝；allow 放行并标注风险裁决。命令里设置的变量不改变服务自身的姿态。
 
 ask-required 命令在预检通过后创建单次审批；deny 不弹窗，allow / allow-risky 按原有姿态直接执行。策略不是对蓄意绕过的安全防护。
 
@@ -157,7 +161,7 @@ ask-required 命令在预检通过后创建单次审批；deny 不弹窗，allow
 
 `bin/gitbash-mcp.js` 无参启动 server；init / uninstall / doctor / audit / policy / help / version 分派到 CLI。仅支持 npm 全局安装，发布白名单为 bin/、lib/、server.js、package.json、README.md、LICENSE。
 
-init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code 六个固定客户端；配置位置见 README。检测依据配置路径或对应可执行文件；未检测的客户端仍可选择。
+init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code 六个固定客户端；通过 `init --dry-run` 查看目标配置路径与写入内容。检测依据配置路径或对应可执行文件；未检测的客户端仍可选择。
 
 菜单使用纯 reducer 管理按键，渲染与终端交互分开；非 TTY 或 `--no-tui` 使用编号输入。支持 `--dry-run`、`--target`、`--yes`、`--runtime` 和测试用 `--root`。
 
@@ -171,7 +175,7 @@ init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code �
 
 状态流为 pending_approval → executing → completed；拒绝、客户端显式取消、窗口关闭、窗口故障、server 退出分别进入 rejected / cancelled / failed 等终态。终态不可再次批准。审批等待不占执行并发、不计入前台等待预算或 timeout_ms。批准后才开始排队和执行计时，前台执行沿用原 MCP 请求 signal，取消时移交同一进程句柄；显式后台请求仍遵守后台作业上限。completed 表示审批执行已返回结果，结果可能包含仍在运行的 job_id；命令非零退出仍通过 result.exit_code 表达。
 
-创建时固定 command、cwd、env、login、timeout_ms、run_in_background 和审计 id。审批页不允许改写请求；执行前重新检查 Bash 与路径转换，沿用创建时的授权裁决，命令仅可启动一次。取消审批只适用于 pending_approval；已经执行时通过 job_kill 停止已取得句柄的作业。
+创建时固定 command、cwd、login、timeout_ms、run_in_background 和审计 id；显式后台请求在创建审批前和批准后各检查一次作业上限。单条请求的窗口 JSON 快照按 UTF-8 字节数限制为 128 KiB，超出时返回 APPROVAL_TOO_LARGE，不创建记录。整个窗口快照上限为 4 MiB，包含 JSON 封装。已结束记录按结束先后清理。审批页不允许改写请求；执行前重新检查 Bash 与路径转换，沿用创建时的授权裁决，命令仅可启动一次。取消审批只适用于 pending_approval；已经执行时通过 job_kill 停止已取得句柄的作业。
 
 ### 8.2 客户端工具
 
@@ -181,7 +185,7 @@ init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code �
 
 ### 8.3 WPF 窗口与通信
 
-每个 MCP server 进程最多一个审批窗口，每次只展示一条请求的命令和执行目录，不展示执行参数、风险原因或请求列表。内容使用无输入边框的文本卡片，按实际宽度换行，默认最多两行；超过两行时提供独立的展开/收起按钮，展开后可滚动查看完整内容。切换请求恢复折叠，同一请求收到新快照时保持展开状态。底部 `<`、`>` 按钮与当前位置按整个窗口居中，Reject、Approve 按钮位于同一水平行的右侧；使用 Catppuccin Latte 浅色配色，所有按钮统一使用 5px 圆角；到达首尾时禁用对应切换按钮。主标题 Command approvals 与14px、Medium 字重副标题 gitbash-mcp 整体居中，整个顶部区域（包括标题上方留白）可拖动、双击最大化或还原，提供最小化与关闭按钮；按钮点击不触发拖动，最小化保留待审批请求，不显示左下说明。仅支持允许本次、拒绝本次，不提供批量批准。新请求不抢走当前请求；当前请求移除后展示相邻请求；无请求时窗口保持打开，关闭窗口撤销全部待审批请求并清理 WPF 子进程；MCP 服务继续接收请求。独立预览脚本关窗时清理轮询和倒计时，自然退出 Node。
+每个 MCP server 进程最多一个审批窗口，每次只展示一条请求的命令、执行目录和执行选项（登录 Shell、前台/后台、时限），不展示风险原因或请求列表；人类批准的就是窗口所示的全部执行参数。内容使用无输入边框的文本卡片，按实际宽度换行，默认最多两行；超过两行时提供独立的展开/收起按钮，展开后可滚动查看完整内容。切换请求恢复折叠，同一请求收到新快照时保持展开状态。底部 `<`、`>` 按钮与当前位置按整个窗口居中，Reject、Approve 按钮位于同一水平行的右侧；使用 Catppuccin Latte 浅色配色，所有按钮统一使用 5px 圆角；到达首尾时禁用对应切换按钮。主标题 Command approvals 与14px、Medium 字重副标题 gitbash-mcp 整体居中，整个顶部区域（包括标题上方留白）可拖动、双击最大化或还原，提供最小化与关闭按钮；按钮点击不触发拖动，最小化保留待审批请求，不显示左下说明。仅支持允许本次、拒绝本次，不提供批量批准。新请求不抢走当前请求；当前请求移除后展示相邻请求；无请求时窗口保持打开，关闭窗口撤销全部待审批请求并清理 WPF 子进程；MCP 服务继续接收请求。独立预览脚本关窗时清理轮询和倒计时，自然退出 Node。
 
 Node 使用固定 Windows PowerShell 路径启动随包发布的 WPF 脚本，隐藏控制台，保留可见审批窗口；脚本使用 STA 和固定 XAML。父子进程通过私有 stdin/stdout JSONL 管道传递快照与选择，命令文本只作为数据；输出严格解析和限制长度，诊断走 stderr。窗口只显示和返回选择，不能自行启动 Bash。
 

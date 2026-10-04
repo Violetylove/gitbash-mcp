@@ -113,6 +113,31 @@ const CASES = [
   ['ls -la &> /dev/null', 'read-only'],
   ['echo hi >> out.txt', 'ask-required'],
   ['for f in $(ls); do echo $f; done', 'ask-required'],
+  // Environment changes can retarget a read-only program at arbitrary code.
+  ["GIT_PAGER='sh -c x' git log", 'ask-required'],
+  ['BASH_ENV=/tmp/x.sh git status', 'ask-required'],
+  ['FOO=1 npm test', 'ask-required'],
+  ['export BASH_ENV=/tmp/x.sh; git status', 'ask-required'],
+  ['export PATH; git status', 'ask-required'],
+  ['GIT_PAGER=x; git log', 'ask-required'],
+  ['env GIT_PAGER=x git log', 'ask-required'],
+  ['env -S "git log" ', 'ask-required'],
+  ['declare -x GIT_PAGER=x; git log', 'ask-required'],
+  ['set -a; GIT_PAGER=x; git log', 'ask-required'],
+  ['read GIT_PAGER <<< x; git log', 'ask-required'],
+  ['printf -v GIT_PAGER x; git log', 'ask-required'],
+  ['X=1 rm -rf /', 'catastrophic'],
+  ['FOO=1 git push --force', 'dangerous'],
+  // Inert environment use stays read-only.
+  ['env', 'read-only'],
+  ['export', 'read-only'],
+  ['export -p', 'read-only'],
+  ['env -u FOO git status', 'read-only'],
+  ['set -euo pipefail; git status', 'read-only'],
+  ['while read line; do echo $line; done < f', 'read-only'],
+  ['MSYS_NO_PATHCONV=1 git status', 'read-only'],
+  ['env -u MSYS_NO_PATHCONV git status', 'read-only'],
+  ['unset MSYS_NO_PATHCONV; git status', 'read-only'],
 ]
 
 console.log('== capability classification (' + CASES.length + ' cases) ==')
@@ -136,7 +161,13 @@ const escWarn = pathconvAdvice('tasklist //FI "IMAGENAME eq x"', { conversionOn:
 assert(escWarn.length === 1 && escWarn[0].severity === 'warning' && escWarn[0].program === 'tasklist', 'another native program gets a warning, not an error', JSON.stringify(escWarn))
 assert(pathconvAdvice('ls //server/share', { conversionOn: false }).length === 0, 'a UNC path is not a flag escape')
 assert(String(describePathconv(escOff[0])).includes('cmd /c'), 'the message names the corrected form', describePathconv(escOff[0]).slice(0, 90))
-assert(String(describePathconv(escOff[0])).includes('MSYS_NO_PATHCONV'), 'the message names the escape hatch', describePathconv(escOff[0]).slice(0, 90))
+assert(String(describePathconv(escOff[0])).includes('env -u MSYS_NO_PATHCONV'), 'the message names the escape hatch', describePathconv(escOff[0]).slice(0, 90))
+assert(pathconvAdvice('env -u MSYS_NO_PATHCONV cmd //c echo hi').length === 0, 'env -u MSYS_NO_PATHCONV turns conversion on for that program')
+assert(pathconvAdvice('env -u MSYS_NO_PATHCONV cmd /c echo hi')[0]?.severity === 'error', 'and then the single-slash switch is the mistake')
+assert(pathconvAdvice('env -u MSYS_NO_PATHCONV echo; cmd //c echo hi')[0]?.severity === 'error', 'env -u reaches only its own program')
+assert(pathconvAdvice('unset MSYS_NO_PATHCONV; cmd //c echo hi').length === 0, 'unset turns conversion on for the rest of the line')
+assert(pathconvAdvice('unset MSYS_NO_PATHCONV; MSYS_NO_PATHCONV= cmd //c echo hi')[0]?.severity === 'error', 'an empty value still turns conversion off')
+assert(pathconvAdvice('unset MSYS_NO_PATHCONV; export MSYS_NO_PATHCONV=1; cmd //c x')[0]?.severity === 'error', 'export turns it back off')
 
 console.log('== project-declared entry points ==')
 const proj = mkdtempSync(join(tmpdir(), 'gbm-proj-'))

@@ -70,7 +70,9 @@ gitbash-mcp init --target codex,cursor
 | `run_in_background` | 设为 `true`，授权后启动后台任务并返回 `job_id` |
 | `timeout_ms` | 命令执行时限，单位毫秒；前台默认 60000，后台省略时不设时限，上限 600000 |
 
-还可通过 `env` 设置本次命令的环境变量，通过 `login: true` 加载 Bash 登录配置。
+还可通过 `login: true` 加载 Bash 登录配置。环境变量直接写在命令里，例如 `FOO=1 npm test`；不提供单独的 `env` 参数。默认审批模式下，这类环境赋值需要人类确认。
+
+路径转换默认关闭，需要时在程序前加 `env -u MSYS_NO_PATHCONV`；这一写法本身不会增加审批要求，实际命令仍按其风险判定。
 
 结果主要看 `exit_code`、`stdout` 和 `stderr`；出现 `job_id` 时，用作业工具继续获取结果。命令失败会返回原因和可用提示。
 
@@ -80,7 +82,7 @@ gitbash-mcp init --target codex,cursor
 
 默认模式下，只读命令和识别到的项目声明入口可以直接执行；其他需要确认的命令会打开审批窗口，严重破坏性命令会被拒绝。
 
-窗口展示命令和执行目录，长内容可以展开；多个请求通过 `<`、`>` 切换。
+窗口展示命令、执行目录和执行选项（登录 Shell、后台、时限），长内容可以展开；多个请求通过 `<`、`>` 切换。
 
 | 操作 | 结果 |
 |---|---|
@@ -93,7 +95,7 @@ gitbash-mcp init --target codex,cursor
 
 如果客户端先中断或超时，已受理的审批仍会保留。不要重复提交命令：用 `approval_list` 找回请求，再通过 `approval_status {approval_id}` 查看结果；需要撤销时使用 `approval_cancel {approval_id}`。客户端断开或服务重启后，记录不再保留。
 
-风险模式由客户端的 MCP 启动环境变量 `GITBASH_MCP_RISKY` 控制：`ask` 为默认审批模式；`allow` 跳过风险审批并放行命令。修改后需重启服务；在单次 `exec` 的 `env` 中设置它不会改变审批模式。
+风险模式由客户端的 MCP 启动环境变量 `GITBASH_MCP_RISKY` 控制：`ask` 为默认审批模式；`allow` 跳过风险审批并放行命令。修改后需重启服务；在命令里设置它不会改变审批模式。
 
 ### 后台任务
 

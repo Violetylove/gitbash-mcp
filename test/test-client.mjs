@@ -200,9 +200,11 @@ try {
   assert(jesc.error_code === 'PATHCONV_ESCAPE' && resc.isError !== true, 'the //c escape is a structured refusal, not a tool error', jesc.error_code)
   assert(!String(jesc.stdout).includes('never-runs'), 'it really did not run', jesc.stdout)
   assert(String(jesc.hint).includes('cmd /c') && String(jesc.hint).includes('MSYS_NO_PATHCONV'), 'the refusal names the fix and the escape hatch', String(jesc.hint).slice(0, 140))
-  const ron = await client.callTool({ name: 'exec', arguments: { command: 'cmd //c echo pathconv-on', env: { MSYS_NO_PATHCONV: '' } } })
+  const ron = await client.callTool({ name: 'exec', arguments: { command: 'env -u MSYS_NO_PATHCONV cmd //c echo pathconv-on' } })
   const jon = JSON.parse(ron.content[0].text)
   assert(jon.exit_code === 0 && String(jon.stdout).includes('pathconv-on'), 'with conversion restored the legacy //c idiom works again', JSON.stringify({ c: jon.exit_code, o: jon.stdout }))
+  const execTool = tools.tools.find(tool => tool.name === 'exec')
+  assert(!('env' in execTool.inputSchema.properties), 'exec has no env parameter: the policy only judges the command text')
 
   console.log('== bash_info ==')
   step('calling bash_info')
@@ -301,6 +303,8 @@ try {
     assert(jo.category === 'opaque' || jo.category === 'ask-required', 'opaque is not labelled safe: ' + probe, jo.category)
   }
   assert(existsSync(victim), 'no opaque probe ran')
+  const envProbe = JSON.parse((await callAndCancelApproval(c3, { command: "GIT_PAGER='rm -rf x' git log" })).content[0].text)
+  assert(envProbe.error_code === 'APPROVAL_CANCELLED', 'an environment prefix on a read-only program asks', envProbe.error_code)
 
   console.log('== policy: read-only commands run under the default stance ==')
   const rro = await c3.callTool({ name: 'exec', arguments: { command: 'git status --porcelain && echo read-only-ran' } })

@@ -67,7 +67,9 @@ gitbash-mcp/
 1. **绝不尝试在受限沙箱内跑 bash**：MSYS2 的 signal pipe 会被 WRITE_RESTRICTED 令牌掐死（Win32 error 5）。
 2. **`exec` 的结果契约不可破坏**：`exit_code / stdout / stderr / timed_out / still_running / truncated /
    spill_path / spill_bytes / spill_truncated / duration_ms / killed_by / timeout_ms / queued_ms / audit_id / policy / warnings`
-   （外加移交时的 `job_id`、缺 bash / 排队超时 / 作业超限 / 旧式 `//c` 时的 `error_code` + `hint`）。命令失败回 JSON，不抛工具错误。
+   （外加移交时的 `job_id`、审批时的 `approval_id`，以及缺 bash / 排队超时 / 作业超限 / 旧式 `//c` / 策略拦截 / 审批结局 / 会话关闭时的
+   `error_code` + `hint`；完整列表见 DESIGN §4.1）。命令失败回 JSON，不抛工具错误。
+   `exec` 不接受 `env` 参数：策略只判读命令文本，环境变量必须写在命令里接受判读。
 3. **启动永不失败**：bash 探测必须惰性 + 缓存；缺 bash 时服务照常起，由 `exec` / `doctor` 报错。
 4. **`command` 作为单个 argv** 传给 `bash -c/-lc`，不要引入引号转义层。
 5. **长任务的四条不变量（DESIGN §5.1）**：① 授权完成后 `run_in_background` 必须毫秒级返回 `job_id`，作业生命期不挂在发起它的请求上；

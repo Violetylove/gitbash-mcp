@@ -30,7 +30,7 @@ public static class ApprovalInput {
     [xml]$layout = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="gitbash-mcp | Command approvals" Width="760" Height="460"
+        Title="gitbash-mcp | Command approvals" Width="760" Height="540"
         MinWidth="560" MinHeight="360" WindowStartupLocation="CenterScreen"
         WindowStyle="None" ResizeMode="CanResizeWithGrip"
         Background="#eff1f5" Foreground="#4c4f69" FontFamily="Segoe UI" FontSize="14">
@@ -107,6 +107,10 @@ public static class ApprovalInput {
                     Background="Transparent" Foreground="#1e66f5" BorderThickness="0" Padding="0,8,0,0" Margin="0"/>
           </StackPanel>
         </Border>
+        <TextBlock Text="Options" Foreground="#6c6f85" Margin="0,20,0,8"/>
+        <Border Background="#e6e9ef" CornerRadius="8" Padding="16">
+          <TextBlock x:Name="Options" TextWrapping="Wrap" LineHeight="24" LineStackingStrategy="BlockLineHeight"/>
+        </Border>
       </StackPanel>
     </ScrollViewer>
     <Grid Grid.Row="2" Margin="24,20,24,24">
@@ -134,6 +138,7 @@ public static class ApprovalInput {
     $script:SelectedIndex = -1
     $script:Command = $script:Window.FindName('Command')
     $script:Directory = $script:Window.FindName('Directory')
+    $script:Options = $script:Window.FindName('Options')
     $script:DisplayedId = $null
     $script:Expanded = @{ Command = $false; Directory = $false }
     $script:Previous = $script:Window.FindName('Previous')
@@ -163,6 +168,7 @@ public static class ApprovalInput {
         $enabled = $null -ne $item -and -not $script:Submitted.ContainsKey($item.approval_id)
         $script:Approve.IsEnabled = $enabled
         $script:Reject.IsEnabled = $enabled
+        $script:Options.Text = Format-Options $item
         if ($null -eq $item) {
             $script:Command.Text = ''
             $script:Directory.Text = ''
@@ -174,6 +180,15 @@ public static class ApprovalInput {
         $script:Directory.Text = [string]$item.cwd
         Update-Content 'Command'
         Update-Content 'Directory'
+    }
+    # Every execution parameter the human approves, not just the command text.
+    function Format-Options($item) {
+        if ($null -eq $item -or $null -eq $item.parameters) { return '' }
+        $p = $item.parameters
+        $shell = if ($p.login) { 'Login shell (bash -lc, loads profile)' } else { 'Plain shell (bash -c)' }
+        $mode = if ($p.run_in_background) { 'Background job' } else { 'Foreground' }
+        $limit = if ($null -ne $p.timeout_ms) { 'Time limit ' + [string]$p.timeout_ms + ' ms' } elseif ($p.run_in_background) { 'No time limit' } else { 'Default time limit' }
+        return $shell + '  |  ' + $mode + '  |  ' + $limit
     }
     function Update-Content([string]$name) {
         $text = $script:Window.FindName($name)
@@ -256,14 +271,15 @@ public static class ApprovalInput {
 
     # Validate actual XAML and controls without displaying or approving a request.
     if ($Validate) {
-        foreach ($name in @('TitleBar','Minimize','Close','Previous','Next','Position','Command','Directory','CommandView','DirectoryView','ExpandCommand','ExpandDirectory','Approve','Reject')) {
+        foreach ($name in @('TitleBar','Minimize','Close','Previous','Next','Position','Command','Directory','Options','CommandView','DirectoryView','ExpandCommand','ExpandDirectory','Approve','Reject')) {
             if ($null -eq $script:Window.FindName($name)) { throw "Missing WPF control: $name" }
         }
         $preview = [pscustomobject]@{ approval_id = 'validate-only'; command = "echo preview`necho second-line";
             cwd = 'C:\preview'; category = 'ask-required'; reason = 'Validation only';
-            parameters = [pscustomobject]@{ login = $false; timeout_ms = $null; run_in_background = $false; env = @{} } }
+            parameters = [pscustomobject]@{ login = $true; timeout_ms = 30000; run_in_background = $true } }
         Set-Requests @($preview)
         if (-not $script:Approve.IsEnabled -or $script:Command.Text -ne $preview.command) { throw 'Selection did not render the original request' }
+        if ($script:Options.Text -notmatch 'Login shell' -or $script:Options.Text -notmatch 'Background job' -or $script:Options.Text -notmatch '30000') { throw 'Options did not render the request parameters' }
         Submit-Selection 'reject'
         if ($script:Approve.IsEnabled -or $script:Reject.IsEnabled) { throw 'Duplicate selection remained enabled' }
         [Console]::Out.WriteLine('WPF layout validated')

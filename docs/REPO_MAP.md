@@ -85,7 +85,7 @@ jobs：MAX_BACKGROUND_JOBS=8（只限制显式后台启动），MAX_RETAINED_JOB
 
 当前风险姿态为 GITBASH_MCP_RISKY=ask / allow；Bash 路径探测支持 GITBASH_BASH。资源护栏使用代码常量，不增加环境配置。
 
-approval：待审批上限 32，结束记录最多 64；人类审批无超时。Windows 适配器窗口启动就绪期限 15 秒，仅检测启动故障。
+approval：待审批上限 32，结束记录最多 64（按结束先后清理），单条 JSON 快照上限 128 KiB（UTF-8 字节数），窗口消息上限 4 MiB；人类审批无超时。Windows 适配器窗口启动就绪期限 15 秒，仅检测启动故障。
 
 ## 5. 测试与文档
 
