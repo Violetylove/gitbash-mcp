@@ -36,7 +36,7 @@ bin/gitbash-mcp.js
 | lib/mcp/tools/approval.js | approval_list / approval_status / approval_cancel 注册 |
 | lib/approval/service.js | 审批创建、exec 内部结果等待、单次决策、中断恢复、状态、取消、审计与清理；待审批清空后关闭窗口 |
 | lib/approval/windows.js | Windows PowerShell 启动、私有 JSONL 管道、就绪与故障处理 |
-| lib/approval/windows.ps1 | WPF 单请求详情、底部翻页与逐条选择；WinForms 为备选 |
+| lib/approval/windows.ps1 | WPF 单请求命令/目录详情（无 Options 区域）、底部翻页与逐条选择；WinForms 为备选 |
 | lib/mcp/tools/exec.js | exec 描述、schema、MCP 适配；registerExecTool |
 | lib/mcp/tools/jobs.js | job_output / job_list / job_kill 注册；registerJobTools |
 | lib/mcp/tools/diagnostics.js | bash_info / doctor / policy 注册；registerDiagnosticTools |
