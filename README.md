@@ -1,4 +1,11 @@
-# gitbash-mcp
+<h1 align="center">gitbash-mcp</h1>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/gitbash-mcp"><img src="https://img.shields.io/npm/v/gitbash-mcp" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/gitbash-mcp"><img src="https://img.shields.io/npm/dm/gitbash-mcp" alt="npm downloads"></a>
+  <a href="https://lobehub.com/mcp/violetylove-gitbash-mcp"><img src="https://lobehub.com/badge/mcp/violetylove-gitbash-mcp" alt="MCP Badge"></a>
+  <a href="https://glama.ai/mcp/servers/Violetylove/gitbash-mcp"><img src="https://glama.ai/mcp/servers/Violetylove/gitbash-mcp/badges/score.svg" alt="gitbash-mcp MCP server – quality and maintenance score on Glama"></a>
+</p>
 
 让 Windows 上的 AI 客户端使用 Git Bash 执行命令，支持人类审批、后台任务和执行记录。
 
