@@ -10,7 +10,7 @@ gitbash-mcp 为 Windows 上的 AI 客户端提供可用的 Git Bash 执行能力
 
 ### 1.1 Skill 分发
 
-`skills/gitbash-mcp/SKILL.md` 是自包含的 agent 使用指引，含标准 name/description frontmatter，无执行脚本。它通过客户端实际发现的 MCP 工具工作，不安装或连接服务，不改变工具契约及宿主权限边界。Agensi ZIP 单独包含该文件；实际能力由本机全局安装并配置的 MCP server 提供，不保证跨客户端兼容或平台审核通过。npm 发布白名单保持不变，打包步骤见 README。
+`skills/gitbash-mcp/SKILL.md` 是自包含的 agent 使用指引，含标准 name/description frontmatter，无执行脚本。缺少服务时，它指导 agent 在授权和宿主能力范围内自行检查依赖、全局安装、配置当前客户端并验证连接；必须由用户完成的重启或授权则说明具体阻碍。它不改变工具契约及宿主权限边界。Agensi ZIP 单独包含该文件；实际能力由本机全局安装并配置的 MCP server 提供，不保证跨客户端兼容或平台审核通过。npm 发布白名单保持不变，打包步骤见 README。
 
 ## 2. 模块架构
 
@@ -155,7 +155,7 @@ Bash 按 `GITBASH_BASH` 指定路径、PATH、常见 Git/MSYS2/Cygwin 安装位�
 
 策略分类为 read-only、project、ask-required、dangerous、catastrophic。项目入口依据向上最多 6 层的 package.json scripts、Makefile targets、justfile recipes 识别；这是对项目声明的信任，不代表对其内部脚本逐条证明安全。
 
-`GITBASH_MCP_RISKY` 是当前风险姿态开关，由客户端启动配置提供：默认 ask 自动放行只读和项目入口，其他命令要求人类决定，catastrophic 拒绝；allow 放行并标注风险裁决。命令里设置的变量不改变服务自身的姿态。
+`GITBASH_MCP_RISKY` 是当前风险姿态开关，由客户端启动配置提供：默认 ask 自动放行只读和项目入口，其他命令要求人类决定，catastrophic 拒绝；allow 放行包括 catastrophic 在内的命令并标注风险裁决。命令里设置的变量不改变服务自身的姿态。
 
 ask-required 命令在预检通过后创建单次审批；deny 不弹窗，allow / allow-risky 按原有姿态直接执行。策略不是对蓄意绕过的安全防护。
 
@@ -167,7 +167,7 @@ ask-required 命令在预检通过后创建单次审批；deny 不弹窗，allow
 
 `bin/gitbash-mcp.js` 无参启动 server；init / uninstall / doctor / audit / policy / help / version 分派到 CLI。仅支持 npm 全局安装，发布白名单为 bin/、lib/、server.js、package.json、README.md、LICENSE。
 
-init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code 六个固定客户端；通过 `init --dry-run` 查看目标配置路径与写入内容。检测依据配置路径或对应可执行文件；未检测的客户端仍可选择。
+init 支持 DSH、Claude Code、Codex CLI、Claude Desktop、Cursor、VS Code 六个固定客户端；通过 `init --dry-run` 查看目标配置路径与是否需要写入，不展示完整配置差异。检测依据配置路径或对应可执行文件；未检测的客户端仍可选择。
 
 菜单使用纯 reducer 管理按键，渲染与终端交互分开；非 TTY 或 `--no-tui` 使用编号输入。支持 `--dry-run`、`--target`、`--yes`、`--runtime` 和测试用 `--root`。
 

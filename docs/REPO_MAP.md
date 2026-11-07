@@ -59,7 +59,7 @@ bin/gitbash-mcp.js
 | lib/cli/menu.js | 纯菜单 reducer 与终端渲染 |
 | lib/cli/theme.js | ANSI 样式，尊重 NO_COLOR / FORCE_COLOR / TERM |
 | package.json | ESM、Node 版本、bin、脚本、依赖、发布白名单 |
-| skills/gitbash-mcp/SKILL.md | 独立分发的 agent skill；MCP 工具发现、执行、审批恢复、作业和权限边界；不入 npm 包 |
+| skills/gitbash-mcp/SKILL.md | 独立分发的 agent skill；自主全局安装与当前客户端配置、风险模式、MCP 工具发现、执行、审批恢复、作业和权限边界；不入 npm 包 |
 
 ## 3. 修改任务索引
 

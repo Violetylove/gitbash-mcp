@@ -110,7 +110,7 @@ gitbash-mcp init --target codex,cursor
 
 `approval_list` 的参数为 `{}`，根据命令、目录和创建时间找到原请求的 `approval_id`。服务不限制人类等待时间，但客户端仍可能有自己的调用超时。
 
-风险模式由客户端的 MCP 启动环境变量 `GITBASH_MCP_RISKY` 控制：`ask` 为默认审批模式；`allow` 跳过风险审批并放行命令。修改后需重启服务；在命令里设置它不会改变审批模式。
+风险模式由客户端的 MCP 启动环境变量 `GITBASH_MCP_RISKY` 控制：`ask` 为默认审批模式，灾难级命令直接拒绝；`allow` 跳过风险审批，连默认拒绝的灾难级命令也会放行。仅在用户明确要求此模式时，在当前客户端对应 server 的 `env` 中合并 `"GITBASH_MCP_RISKY": "allow"`（init 创建的 server 键为 `gitbash`；非 JSON 配置使用对应格式），保留其他设置。修改后需重启服务，并用 MCP `policy` 验证；恢复默认时删除该变量或设为 `ask` 后重启。在命令里设置它不会改变运行中服务的审批模式，也不会覆盖宿主权限。
 
 ### 后台任务
 
@@ -163,7 +163,7 @@ npm uninstall -g gitbash-mcp
 
 ## Agent Skill 与 Agensi 打包
 
-可发现的使用指引位于 [`skills/gitbash-mcp/SKILL.md`](skills/gitbash-mcp/SKILL.md)。将 `skills/gitbash-mcp` 文件夹安装到客户端支持的 skill 目录；具体位置和加载方式以该客户端文档为准。Skill 不会自动安装或连接 MCP，仍需完成上面的全局安装、客户端配置与重启步骤；工具名称以客户端实际发现的 MCP 工具为准。
+可发现的使用指引位于 [`skills/gitbash-mcp/SKILL.md`](skills/gitbash-mcp/SKILL.md)。将 `skills/gitbash-mcp` 文件夹安装到客户端支持的 skill 目录；具体位置和加载方式以该客户端文档为准。需要接入时，skill 指导 agent 在授权和宿主能力范围内自行检查依赖、全局安装、配置当前客户端并验证连接；若必须由用户重启或授权，会说明具体阻碍。Skill 本身不包含 MCP 服务，工具名称以客户端实际发现的 MCP 工具为准。
 
 Agensi 上传包需要 ZIP 中包含 `SKILL.md`。在仓库根目录用 PowerShell 单独打包该 skill（ZIP 根目录直接包含 `SKILL.md`）：
 

@@ -4,7 +4,7 @@
 
 ## 1. 项目目标
 
-Skill 分发准备（2026-11-07）：新增 `skills/gitbash-mcp/SKILL.md`，涵盖跨客户端工具发现、安装前提、安全边界、审批恢复和后台作业。README 提供独立 Agensi ZIP 打包步骤；skill 不自动安装 MCP，不改变 npm 发布白名单。平台上传、审核与客户端兼容性尚未验证。
+Skill 分发准备（2026-11-07）：新增 `skills/gitbash-mcp/SKILL.md`，涵盖 agent 自行安装和配置 MCP、跨客户端工具发现、风险模式配置、安全边界、审批恢复和后台作业。README 提供独立 Agensi ZIP 打包步骤；skill 不包含 MCP 服务，不改变 npm 发布白名单。平台上传、审核与客户端兼容性尚未验证。
 
 - 为 Windows AI 客户端提供可靠的 Git Bash 执行能力。
 - 命令失败可诊断，长任务可找回，风险操作可解释，调用可审计。
