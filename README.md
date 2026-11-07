@@ -161,6 +161,18 @@ npm uninstall -g gitbash-mcp
 
 本服务在 agent 沙箱外运行，具有启动它的 agent 进程的完整用户权限，**没有文件沙箱**。命令分类、审批和审计用于减少误操作，不构成安全隔离；项目声明的脚本也不代表已经逐条验证安全。
 
+## Agent Skill 与 Agensi 打包
+
+可发现的使用指引位于 [`skills/gitbash-mcp/SKILL.md`](skills/gitbash-mcp/SKILL.md)。将 `skills/gitbash-mcp` 文件夹安装到客户端支持的 skill 目录；具体位置和加载方式以该客户端文档为准。Skill 不会自动安装或连接 MCP，仍需完成上面的全局安装、客户端配置与重启步骤；工具名称以客户端实际发现的 MCP 工具为准。
+
+Agensi 上传包需要 ZIP 中包含 `SKILL.md`。在仓库根目录用 PowerShell 单独打包该 skill（ZIP 根目录直接包含 `SKILL.md`）：
+
+```powershell
+Compress-Archive -LiteralPath .\skills\gitbash-mcp\SKILL.md -DestinationPath .\gitbash-mcp-skill.zip
+```
+
+上传前检查 ZIP 内容并填写平台要求的资料。按 [Agensi 的 MCP skill 上架要求](https://www.agensi.io/docs/what-you-can-sell)，在 listing 的 **Needs access to** 中添加本 skill 依赖的 `gitbash-mcp` server。实际执行能力通过本机 MCP server 提供，ZIP 仅包含使用指引，不包含服务器或安装脚本；不能保证所有客户端兼容或 Agensi 审核通过。该 ZIP 与 npm 发布包独立，`npm pack` 保持原源码白名单，不收录 `skills/`。
+
 ## 更多文档
 
 [设计说明](docs/DESIGN.md) · [目标与进度](docs/PROGRESS.md) · [维护者指南](AGENTS.md)

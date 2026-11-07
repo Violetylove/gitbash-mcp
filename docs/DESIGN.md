@@ -8,6 +8,10 @@ gitbash-mcp 为 Windows 上的 AI 客户端提供可用的 Git Bash 执行能力
 
 本进程在沙箱外运行，权限等于启动它的 agent 进程的完整用户权限；无文件沙箱。命令分类、审批、环境洗白、资源上限和审计用于减少误操作，不构成 OS 安全隔离。
 
+### 1.1 Skill 分发
+
+`skills/gitbash-mcp/SKILL.md` 是自包含的 agent 使用指引，含标准 name/description frontmatter，无执行脚本。它通过客户端实际发现的 MCP 工具工作，不安装或连接服务，不改变工具契约及宿主权限边界。Agensi ZIP 单独包含该文件；实际能力由本机全局安装并配置的 MCP server 提供，不保证跨客户端兼容或平台审核通过。npm 发布白名单保持不变，打包步骤见 README。
+
 ## 2. 模块架构
 
 lib/ 按模块分成 mcp、execution、policy、approval、jobs、environment、audit、cli。审批状态与桌面窗口由 approval 模块管理，跨模块依赖使用明确的相对路径。
