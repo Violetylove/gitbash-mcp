@@ -79,7 +79,7 @@ bin/gitbash-mcp.js
 | 客户端配置与入口 | cli/index.js、bin/gitbash-mcp.js | test-cli |
 | 菜单与配色 | cli/menu.js、cli/theme.js | test-menu |
 | 发布文件 | package.json | npm pack --dry-run |
-| Skill 内容与 Agensi ZIP | skills/gitbash-mcp/SKILL.md、README.md | skill frontmatter 校验、工具 schema 与文档契约核对、ZIP 内容检查 |
+| Skill 与双语使用文档 | skills/gitbash-mcp/SKILL.md、README.md、README.en.md | skill frontmatter 校验、工具 schema 与文档契约核对、双语链接检查 |
 
 ## 4. 执行常量
 
@@ -106,4 +106,4 @@ approval：待审批上限 32，结束记录最多 64（按结束先后清理）
 
 test/fixtures/server.mjs 用测试窗口替身运行真实 MCP 组装。六套自动测试、配套夹具和 WPF 控件验证入口保留；测试文件不入发布包。历史验证结果见 PROGRESS.md。
 
-README 面向用户；DESIGN 描述设计和契约；PROGRESS 记录目标、历史进度、待办与验收标准；AGENTS 约束维护方式。
+README.md（中文）与 README.en.md（英文）面向用户并互相索引；英文版在仓库中维护，不扩大 npm 发布白名单。DESIGN 描述设计和契约；PROGRESS 记录目标、历史进度、待办与验收标准；AGENTS 约束维护方式。

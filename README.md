@@ -1,22 +1,10 @@
-<h1 align="center">gitbash-mcp</h1>
+# gitbash-mcp
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/gitbash-mcp"><img src="https://img.shields.io/npm/v/gitbash-mcp" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/gitbash-mcp"><img src="https://img.shields.io/npm/dm/gitbash-mcp" alt="npm downloads"></a>
-  <a href="https://lobehub.com/mcp/violetylove-gitbash-mcp"><img src="https://lobehub.com/badge/mcp/violetylove-gitbash-mcp" alt="MCP Badge"></a>
-  <a href="https://glama.ai/mcp/servers/Violetylove/gitbash-mcp"><img src="https://glama.ai/mcp/servers/Violetylove/gitbash-mcp/badges/score.svg" alt="gitbash-mcp MCP server – quality and maintenance score on Glama"></a>
-</p>
+[English](https://github.com/Violetylove/gitbash-mcp/blob/main/README.en.md) · 简体中文 · [npm](https://www.npmjs.com/package/gitbash-mcp)
 
 让 Windows 上的 AI 客户端使用 Git Bash 执行命令，支持人类审批、后台任务和执行记录。
 
 适合 Git 操作、Shell 管道、项目构建和脚本执行。Windows 原生 cmdlet、COM 和 .NET 操作仍适合使用 PowerShell。
-
-## 功能
-
-- **执行命令**：支持单条命令和多行脚本，返回输出、退出码与错误提示。
-- **人类审批**：需要确认的命令先在本机弹窗中展示，批准后才执行。
-- **长任务管理**：任务可在后台继续运行，随时查看输出或停止。
-- **诊断与记录**：检查 Bash 环境、查看命令策略和审计记录。
 
 ## 安装与接入
 
@@ -49,15 +37,7 @@ gitbash-mcp init --target codex,cursor
 
 ## 使用
 
-接入后，可以直接向 AI 描述任务，例如：
-
-> 使用 gitbash-mcp 查看这个项目的 Git 状态。
->
-> 在项目目录执行构建；如果需要审批，等待我确认。
->
-> 将这个长任务放到后台运行，稍后查看输出。
-
-以下示例是客户端调用 MCP 工具的参数，不是需要粘贴到终端的命令。
+向 AI 描述任务即可，例如「使用 gitbash-mcp 查看 Git 状态」。以下 JSON 是 MCP 工具参数。
 
 ### 执行命令
 
@@ -75,11 +55,11 @@ gitbash-mcp init --target codex,cursor
 | `command` | 必填；Bash 命令或多行脚本 |
 | `cwd` | 执行目录；省略时优先使用客户端提供的工作区，否则使用服务工作目录 |
 | `run_in_background` | 设为 `true`，授权后启动后台任务并返回 `job_id` |
-| `timeout_ms` | 命令执行时限，单位毫秒；前台默认 60000，后台省略时不设时限，上限 600000 |
+| `timeout_ms` | 命令执行时限，1000–600000 毫秒；前台默认 60000，后台省略时不设时限 |
 
 还可通过 `login: true` 加载 Bash 登录配置。环境变量直接写在命令里，例如 `FOO=1 npm test`；不提供单独的 `env` 参数。默认审批模式下，这类环境赋值需要人类确认。
 
-路径转换默认关闭，需要时在程序前加 `env -u MSYS_NO_PATHCONV`；这一写法本身不会增加审批要求，实际命令仍按其风险判定。
+路径转换默认关闭，需要时在程序前加 `env -u MSYS_NO_PATHCONV`；这一写法本身不会增加审批要求，实际命令仍按其风险判定。关闭转换时，使用 `cmd /c`，旧式 `cmd //c` 会被拒绝。
 
 结果主要看 `exit_code`、`stdout` 和 `stderr`；出现 `job_id` 时，用作业工具继续获取结果。命令失败会返回原因和可用提示。
 
@@ -91,20 +71,9 @@ gitbash-mcp init --target codex,cursor
 
 默认模式下，只读命令和识别到的项目声明入口可以直接执行；其他需要确认的命令会打开审批窗口，严重破坏性命令会被拒绝。
 
-窗口展示命令和执行目录，长内容可以展开；多个请求通过 `<`、`>` 切换。登录 Shell、后台运行和时限不在窗口展示，批准后仍按原请求参数执行。
-
-最后一条待审批请求批准、拒绝或撤销后，窗口自动关闭；已批准的命令继续执行。新的审批请求到来时会重新打开窗口。
-
-| 操作 | 结果 |
-|---|---|
-| **Approve** | 批准本次原始命令，执行后向原 `exec` 调用返回结果 |
-| **Reject** | 拒绝本次请求，命令不执行 |
-| **关闭窗口** | 取消全部待审批请求；已经批准的执行不受影响 |
-| **最小化** | 保留待审批请求，稍后可以继续处理 |
+本机窗口展示命令和目录，长内容可展开，多条请求可切换。Approve 仅批准本次原请求；Reject 拒绝本次；关闭窗口撤销全部待审批请求。待审批清空后窗口自动关闭，已批准的执行继续。窗口不展示登录 Shell、后台模式和时限；它们在请求中固定，批准后按原参数执行。只有本机窗口可以批准，MCP 仅提供查询和取消。
 
 审批不设超时，也不计入命令执行时限。正常流程中，`exec` 等待人类决定，客户端不需要轮询审批。
-
-多条请求各自处理、各自返回：拒绝立即返回；批准后在该条命令执行结束或转为后台作业时返回，不等待其他请求。
 
 如果客户端先中断或超时，已受理的审批仍会保留。不要重复提交命令：用 `approval_list` 找回请求，再通过 `approval_status {approval_id}` 查看结果；需要撤销时使用 `approval_cancel {approval_id}`。客户端断开或服务重启后，记录不再保留。
 
@@ -132,7 +101,7 @@ gitbash-mcp init --target codex,cursor
 | `job_list` | 找回当前服务中的任务 |
 | `job_kill {job_id}` | 停止任务及其子进程 |
 
-前台执行最多等待 45 秒，审批时间另计。到点或调用取消时，仍在执行的命令会移交为后台作业；需要停止时使用 `job_kill`。命令自己的执行时限到点则会停止执行。
+前台授权后最多等待 45 秒，排队计入，审批另计。预算到点或收到调用取消信号时，运行中的命令移交后台，并清除继承的执行时限；使用 `job_list` 找回、`job_kill` 停止。移交前执行时限到点会停止进程树；显式后台任务遵守传入的时限。客户端超时但未发送取消信号时，服务无法自行识别。
 
 后台任务不跨服务重启保留；客户端断开或服务退出时会清理运行中的任务。
 
@@ -142,13 +111,13 @@ gitbash-mcp init --target codex,cursor
 
 ```powershell
 gitbash-mcp doctor    # 检查运行环境
-gitbash-mcp policy    # 查看当前命令策略
+gitbash-mcp policy    # 查看此终端进程的命令策略
 gitbash-mcp audit     # 查看执行与审批记录
 ```
 
-AI 也可以调用 `doctor`、`policy` 和 `bash_info` 获取诊断信息。
+AI 可调用 `doctor`、`policy` 和 `bash_info`。验证客户端启动环境中的风险模式时，请使用 MCP `policy`。
 
-找不到 Bash 时，运行 `doctor`，按提示安装 Git for Windows 或修正路径，再重新连接客户端。调用失败或超时后，先检查已有审批和作业，避免重复执行。
+找不到 Bash 时，运行 `doctor`，按提示安装 Git for Windows，或在客户端启动环境设置 `GITBASH_BASH` 为 `bash.exe` 路径，再重启服务。调用失败或超时后，先检查已有审批和作业，避免重复执行。
 
 移除客户端配置及全局安装：
 
@@ -161,17 +130,9 @@ npm uninstall -g gitbash-mcp
 
 本服务在 agent 沙箱外运行，具有启动它的 agent 进程的完整用户权限，**没有文件沙箱**。命令分类、审批和审计用于减少误操作，不构成安全隔离；项目声明的脚本也不代表已经逐条验证安全。
 
-## Agent Skill 与 Agensi 打包
+## Agent Skill
 
-可发现的使用指引位于 [`skills/gitbash-mcp/SKILL.md`](skills/gitbash-mcp/SKILL.md)。将 `skills/gitbash-mcp` 文件夹安装到客户端支持的 skill 目录；具体位置和加载方式以该客户端文档为准。需要接入时，skill 指导 agent 在授权和宿主能力范围内自行检查依赖、全局安装、配置当前客户端并验证连接；若必须由用户重启或授权，会说明具体阻碍。Skill 本身不包含 MCP 服务，工具名称以客户端实际发现的 MCP 工具为准。
-
-Agensi 上传包需要 ZIP 中包含 `SKILL.md`。在仓库根目录用 PowerShell 单独打包该 skill（ZIP 根目录直接包含 `SKILL.md`）：
-
-```powershell
-Compress-Archive -LiteralPath .\skills\gitbash-mcp\SKILL.md -DestinationPath .\gitbash-mcp-skill.zip
-```
-
-上传前检查 ZIP 内容并填写平台要求的资料。按 [Agensi 的 MCP skill 上架要求](https://www.agensi.io/docs/what-you-can-sell)，在 listing 的 **Needs access to** 中添加本 skill 依赖的 `gitbash-mcp` server。实际执行能力通过本机 MCP server 提供，ZIP 仅包含使用指引，不包含服务器或安装脚本；不能保证所有客户端兼容或 Agensi 审核通过。该 ZIP 与 npm 发布包独立，`npm pack` 保持原源码白名单，不收录 `skills/`。
+独立的 [Agent Skill](skills/gitbash-mcp/SKILL.md) 可安装到客户端支持的 skill 目录，指导 agent 检查依赖、全局安装、配置和使用。它不包含 MCP 服务，也不进入 npm 发布包。
 
 ## 更多文档
 

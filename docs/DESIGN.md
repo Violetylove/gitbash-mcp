@@ -10,7 +10,7 @@ gitbash-mcp 为 Windows 上的 AI 客户端提供可用的 Git Bash 执行能力
 
 ### 1.1 Skill 分发
 
-`skills/gitbash-mcp/SKILL.md` 是自包含的 agent 使用指引，含标准 name/description frontmatter，无执行脚本。缺少服务时，它指导 agent 在授权和宿主能力范围内自行检查依赖、全局安装、配置当前客户端并验证连接；必须由用户完成的重启或授权则说明具体阻碍。它不改变工具契约及宿主权限边界。Agensi ZIP 单独包含该文件；实际能力由本机全局安装并配置的 MCP server 提供，不保证跨客户端兼容或平台审核通过。npm 发布白名单保持不变，打包步骤见 README。
+`skills/gitbash-mcp/SKILL.md` 是自包含的 agent 使用指引，含标准 name/description frontmatter，无执行脚本。缺少服务时，它指导 agent 在授权和宿主能力范围内自行检查依赖、全局安装、配置当前客户端并验证连接；必须由用户完成的重启或授权则说明具体阻碍。它不改变工具契约及宿主权限边界。实际能力由本机全局安装并配置的 MCP server 提供；skill 不进入 npm 发布包，不保证跨客户端兼容。npm 发布白名单保持不变。
 
 ## 2. 模块架构
 
